@@ -107,6 +107,8 @@ def main():
             errors.append("manifest kernel sector count is zero")
     if "AUTOEXEC.BAT" not in files:
         errors.append("AUTOEXEC.BAT missing from root")
+    if "DEMO.BAT" not in files:
+        errors.append("DEMO.BAT missing from root")
     if "README.TXT" not in files:
         errors.append("README.TXT missing from root")
 
@@ -121,4 +123,3 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

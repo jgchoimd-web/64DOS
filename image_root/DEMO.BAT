@@ -1,0 +1,7 @@
+REM 64DOS feature demo
+ECHO 64DOS demo script
+HELP
+PWD
+CAT README.TXT
+COLOR 1E
+
