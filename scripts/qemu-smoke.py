@@ -15,7 +15,15 @@ EXPECTED = [
     "64DOS AUTOEXEC",
     "64DOS v0.1",
     "README.TXT",
-    "A:\\>",
+    "FAT12 root LBA",
+    "Current date:",
+    "Current time:",
+    "Hex dump of README.TXT",
+    "64DOS demo script",
+    "Commands: VER HELP DIR/LS",
+    "Color set to 1E",
+    "Prompt is 64DOS>",
+    "64DOS>",
 ]
 
 

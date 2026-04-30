@@ -12,8 +12,9 @@ The first release is intentionally small:
 - VGA text console with serial output mirrored to COM1.
 - Serial input for automation and PS/2 keyboard input for manual use.
 - Read-only FAT12 `A:\` filesystem from the RAM-loaded floppy image.
-- Built-in commands: `VER`, `HELP`, `DIR`, `TYPE`, `CLS`, `MEM`, `ECHO`,
-  `REBOOT`.
+- Built-in commands: `VER`, `HELP`, `DIR`/`LS`, `TYPE`/`CAT`, `DUMP`/`HEX`,
+  `RUN`, `DATE`, `TIME`, `COLOR`, `PROMPT`, `PWD`, `CLS`, `MEM`/`INFO`,
+  `ECHO`, `REBOOT`.
 
 Legacy 16-bit DOS `.COM` and `.EXE` compatibility is out of scope for v1.
 
@@ -50,7 +51,7 @@ It is always exactly `1,474,560` bytes.
 ## Run
 
 ```sh
-qemu-system-x86_64 -fda dist/64dos.img -boot a -serial stdio -display curses
+qemu-system-x86_64 -drive file=dist/64dos.img,format=raw,if=floppy -boot a -serial stdio -display curses
 ```
 
 For CI-style serial-only boot:
@@ -73,4 +74,3 @@ python3 scripts/qemu-smoke.py dist/64dos.img
 64DOS is released under the Unlicense. PDOS provenance is documented in
 `UPSTREAM.md`; this repository does not import GPL, FreeDOS, or Microsoft
 MS-DOS code.
-

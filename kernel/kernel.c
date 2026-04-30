@@ -6,7 +6,9 @@
 #define VGA_ADDR 0xB8000u
 #define VGA_COLS 80u
 #define VGA_ROWS 25u
-#define VGA_COLOR 0x07u
+#define DEFAULT_VGA_COLOR 0x07u
+#define DEFAULT_PROMPT "A:\\>"
+#define MAX_SCRIPT_DEPTH 3u
 
 #define COM1 0x3F8u
 
@@ -21,6 +23,9 @@ static uint32_t g_image_size;
 static uint16_t *const vga = (uint16_t *)(uintptr_t)VGA_ADDR;
 static uint32_t cursor_x;
 static uint32_t cursor_y;
+static uint8_t vga_color = DEFAULT_VGA_COLOR;
+static char prompt_text[32] = DEFAULT_PROMPT;
+static uint32_t script_depth;
 
 typedef struct fat12 {
     const uint8_t *image;
@@ -39,6 +44,7 @@ typedef struct fat12 {
 static fat12_t fs;
 static char line_buffer[128];
 static uint8_t file_buffer[8192];
+static uint8_t script_buffers[MAX_SCRIPT_DEPTH][8192];
 
 static inline void outb(uint16_t port, uint8_t value) {
     __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
@@ -101,6 +107,72 @@ static char *skip_spaces(char *s) {
     return s;
 }
 
+static void trim_right(char *s) {
+    uint32_t len = str_len(s);
+    while (len && (s[len - 1] == ' ' || s[len - 1] == '\t')) {
+        s[--len] = 0;
+    }
+}
+
+static char *take_token(char **cursor) {
+    char *token = skip_spaces(*cursor);
+    char *end = token;
+    while (*end && *end != ' ' && *end != '\t') {
+        end++;
+    }
+    if (*end) {
+        *end++ = 0;
+    }
+    *cursor = skip_spaces(end);
+    return token;
+}
+
+static int hex_value(char c) {
+    c = upper(c);
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+static bool parse_uint(char *s, uint32_t *out) {
+    uint32_t base = 10;
+    uint32_t value = 0;
+    s = skip_spaces(s);
+    if (!*s) {
+        return false;
+    }
+    if (s[0] == '0' && upper(s[1]) == 'X') {
+        base = 16;
+        s += 2;
+    }
+    while (*s) {
+        int digit = base == 16 ? hex_value(*s) : (*s >= '0' && *s <= '9' ? *s - '0' : -1);
+        if (digit < 0 || (uint32_t)digit >= base) {
+            return false;
+        }
+        value = value * base + (uint32_t)digit;
+        s++;
+    }
+    *out = value;
+    return true;
+}
+
+static void copy_text(char *dst, uint32_t cap, const char *src) {
+    uint32_t i = 0;
+    if (cap == 0) {
+        return;
+    }
+    while (src[i] && i + 1 < cap) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = 0;
+}
+
 static void serial_init(void) {
     outb(COM1 + 1, 0x00);
     outb(COM1 + 3, 0x80);
@@ -136,7 +208,7 @@ static void vga_sync_cursor(void) {
 static void vga_clear(void) {
     for (uint32_t y = 0; y < VGA_ROWS; y++) {
         for (uint32_t x = 0; x < VGA_COLS; x++) {
-            vga[y * VGA_COLS + x] = (uint16_t)((VGA_COLOR << 8) | ' ');
+            vga[y * VGA_COLS + x] = (uint16_t)(((uint16_t)vga_color << 8) | ' ');
         }
     }
     cursor_x = 0;
@@ -154,7 +226,7 @@ static void vga_scroll(void) {
         }
     }
     for (uint32_t x = 0; x < VGA_COLS; x++) {
-        vga[(VGA_ROWS - 1) * VGA_COLS + x] = (uint16_t)((VGA_COLOR << 8) | ' ');
+        vga[(VGA_ROWS - 1) * VGA_COLS + x] = (uint16_t)(((uint16_t)vga_color << 8) | ' ');
     }
     cursor_y = VGA_ROWS - 1;
 }
@@ -177,7 +249,7 @@ static void console_putc(char c) {
     if (c == '\b') {
         if (cursor_x > 0) {
             cursor_x--;
-            vga[cursor_y * VGA_COLS + cursor_x] = (uint16_t)((VGA_COLOR << 8) | ' ');
+            vga[cursor_y * VGA_COLS + cursor_x] = (uint16_t)(((uint16_t)vga_color << 8) | ' ');
             serial_putc('\b');
             serial_putc(' ');
             serial_putc('\b');
@@ -187,7 +259,7 @@ static void console_putc(char c) {
     }
 
     serial_putc(c);
-    vga[cursor_y * VGA_COLS + cursor_x] = (uint16_t)((VGA_COLOR << 8) | (uint8_t)c);
+    vga[cursor_y * VGA_COLS + cursor_x] = (uint16_t)(((uint16_t)vga_color << 8) | (uint8_t)c);
     cursor_x++;
     if (cursor_x >= VGA_COLS) {
         cursor_x = 0;
@@ -209,6 +281,12 @@ static void print_hex32(uint32_t value) {
     for (int i = 7; i >= 0; i--) {
         console_putc(hex[(value >> (i * 4)) & 0xFu]);
     }
+}
+
+static void print_hex8(uint8_t value) {
+    static const char hex[] = "0123456789ABCDEF";
+    console_putc(hex[(value >> 4) & 0xFu]);
+    console_putc(hex[value & 0xFu]);
 }
 
 static void print_dec(uint32_t value) {
@@ -493,6 +571,14 @@ static void cmd_dir(void) {
     print(" bytes\n");
 }
 
+static uint32_t fs_file_size(const char *name) {
+    const uint8_t *e = find_root_file(name);
+    if (!e) {
+        return 0xFFFFFFFFu;
+    }
+    return rd32(e + 28);
+}
+
 static void cmd_type(const char *name) {
     uint32_t len = 0;
     if (!fs_read_file(name, file_buffer, sizeof(file_buffer) - 1u, &len)) {
@@ -507,8 +593,184 @@ static void cmd_type(const char *name) {
     }
 }
 
-static void cmd_help(void) {
-    print("Commands: VER HELP DIR TYPE CLS MEM ECHO REBOOT\n");
+static void cmd_dump(char *args) {
+    char *name = take_token(&args);
+    uint32_t count = 128;
+    uint32_t file_size;
+    uint32_t len = 0;
+
+    if (!*name) {
+        print("Usage: DUMP filename [bytes]\n");
+        return;
+    }
+    if (*args && !parse_uint(args, &count)) {
+        print("Bad byte count\n");
+        return;
+    }
+    if (count > sizeof(file_buffer)) {
+        count = sizeof(file_buffer);
+    }
+
+    file_size = fs_file_size(name);
+    if (file_size == 0xFFFFFFFFu || !fs_read_file(name, file_buffer, count, &len)) {
+        print("File not found\n");
+        return;
+    }
+
+    print("Hex dump of ");
+    print(name);
+    print(" (");
+    print_dec(file_size);
+    print(" bytes, showing ");
+    print_dec(len);
+    print(")\n");
+
+    for (uint32_t off = 0; off < len; off += 16) {
+        print_hex32(off);
+        print("  ");
+        for (uint32_t i = 0; i < 16; i++) {
+            if (off + i < len) {
+                print_hex8(file_buffer[off + i]);
+            } else {
+                print("  ");
+            }
+            console_putc(' ');
+        }
+        console_putc(' ');
+        for (uint32_t i = 0; i < 16 && off + i < len; i++) {
+            uint8_t c = file_buffer[off + i];
+            console_putc(c >= 32 && c < 127 ? (char)c : '.');
+        }
+        console_putc('\n');
+    }
+}
+
+static uint8_t cmos_read(uint8_t reg) {
+    outb(0x70, reg);
+    return inb(0x71);
+}
+
+static uint8_t bcd_to_bin(uint8_t value) {
+    return (uint8_t)((value & 0x0Fu) + ((value >> 4) * 10u));
+}
+
+typedef struct rtc_time {
+    uint8_t second;
+    uint8_t minute;
+    uint8_t hour;
+    uint8_t day;
+    uint8_t month;
+    uint8_t year;
+} rtc_time_t;
+
+static void rtc_read(rtc_time_t *rtc) {
+    uint8_t status_b;
+    while (cmos_read(0x0A) & 0x80u) {
+    }
+    rtc->second = cmos_read(0x00);
+    rtc->minute = cmos_read(0x02);
+    rtc->hour = cmos_read(0x04);
+    rtc->day = cmos_read(0x07);
+    rtc->month = cmos_read(0x08);
+    rtc->year = cmos_read(0x09);
+    status_b = cmos_read(0x0B);
+
+    if ((status_b & 0x04u) == 0) {
+        rtc->second = bcd_to_bin(rtc->second);
+        rtc->minute = bcd_to_bin(rtc->minute);
+        rtc->hour = (uint8_t)((rtc->hour & 0x80u) | bcd_to_bin(rtc->hour & 0x7Fu));
+        rtc->day = bcd_to_bin(rtc->day);
+        rtc->month = bcd_to_bin(rtc->month);
+        rtc->year = bcd_to_bin(rtc->year);
+    }
+
+    if ((status_b & 0x02u) == 0 && (rtc->hour & 0x80u)) {
+        rtc->hour = (uint8_t)(((rtc->hour & 0x7Fu) + 12u) % 24u);
+    }
+}
+
+static void print_2(uint32_t value) {
+    console_putc((char)('0' + (value / 10u) % 10u));
+    console_putc((char)('0' + value % 10u));
+}
+
+static void cmd_date(void) {
+    rtc_time_t rtc;
+    rtc_read(&rtc);
+    print("Current date: 20");
+    print_2(rtc.year);
+    console_putc('-');
+    print_2(rtc.month);
+    console_putc('-');
+    print_2(rtc.day);
+    console_putc('\n');
+}
+
+static void cmd_time(void) {
+    rtc_time_t rtc;
+    rtc_read(&rtc);
+    print("Current time: ");
+    print_2(rtc.hour);
+    console_putc(':');
+    print_2(rtc.minute);
+    console_putc(':');
+    print_2(rtc.second);
+    print("\n");
+}
+
+static void cmd_color(char *args) {
+    int bg;
+    int fg;
+    args = skip_spaces(args);
+    if (!*args) {
+        print("Current color: ");
+        print_hex8(vga_color);
+        print("\nUsage: COLOR bgfg, example COLOR 1E\n");
+        return;
+    }
+    bg = hex_value(args[0]);
+    fg = hex_value(args[1]);
+    if (bg < 0 || fg < 0 || args[2]) {
+        print("Usage: COLOR bgfg, example COLOR 1E\n");
+        return;
+    }
+    vga_color = (uint8_t)((bg << 4) | fg);
+    vga_clear();
+    print("Color set to ");
+    print_hex8(vga_color);
+    print("\n");
+}
+
+static void cmd_prompt(char *args) {
+    args = skip_spaces(args);
+    if (!*args) {
+        copy_text(prompt_text, sizeof(prompt_text), DEFAULT_PROMPT);
+    } else {
+        copy_text(prompt_text, sizeof(prompt_text), args);
+    }
+    print("Prompt is ");
+    print(prompt_text);
+    print("\n");
+}
+
+static void cmd_help(char *topic) {
+    topic = skip_spaces(topic);
+    if (!*topic) {
+        print("Commands: VER HELP DIR/LS TYPE/CAT DUMP/HEX RUN CLS MEM/INFO\n");
+        print("          DATE TIME COLOR PROMPT PWD ECHO REBOOT\n");
+        return;
+    }
+    if (str_icmp(topic, "DUMP") == 0 || str_icmp(topic, "HEX") == 0) {
+        print("DUMP filename [bytes] - show file bytes in hex and ASCII\n");
+    } else if (str_icmp(topic, "RUN") == 0) {
+        print("RUN filename - run a root-directory batch file, one command per line\n");
+    } else if (str_icmp(topic, "COLOR") == 0) {
+        print("COLOR bgfg - set VGA text color with DOS hex digits, e.g. COLOR 1E\n");
+    } else if (str_icmp(topic, "PROMPT") == 0) {
+        print("PROMPT [text] - set the command prompt, or reset it without text\n");
+    } else {
+        print("No detailed help for that command\n");
+    }
 }
 
 static void cmd_ver(void) {
@@ -529,6 +791,22 @@ static void cmd_mem(void) {
     print("\n");
 }
 
+static void cmd_info(void) {
+    cmd_mem();
+    print("FAT12 root LBA ");
+    print_dec(fs.root_lba);
+    print(", data LBA ");
+    print_dec(fs.data_lba);
+    print(", root entries ");
+    print_dec(fs.root_entries);
+    print("\n");
+}
+
+static void print_prompt(void) {
+    print(prompt_text);
+    console_putc(' ');
+}
+
 static void reboot(void) {
     print("Rebooting...\n");
     for (uint32_t i = 0; i < 100000; i++) {
@@ -540,65 +818,37 @@ static void reboot(void) {
     }
 }
 
-static void execute_command(char *line) {
-    char *cmd = skip_spaces(line);
-    uint32_t len = str_len(cmd);
-    while (len && (cmd[len - 1] == ' ' || cmd[len - 1] == '\t')) {
-        cmd[--len] = 0;
-    }
-    if (!*cmd) {
-        return;
-    }
+static void execute_command(char *line);
 
-    if (str_icmp(cmd, "VER") == 0) {
-        cmd_ver();
-    } else if (str_icmp(cmd, "HELP") == 0) {
-        cmd_help();
-    } else if (str_icmp(cmd, "DIR") == 0) {
-        cmd_dir();
-    } else if (str_icmp(cmd, "CLS") == 0) {
-        vga_clear();
-    } else if (str_icmp(cmd, "MEM") == 0) {
-        cmd_mem();
-    } else if (str_icmp(cmd, "REBOOT") == 0) {
-        reboot();
-    } else if (starts_icase(cmd, "ECHO")) {
-        char *text = cmd + 4;
-        text = skip_spaces(text);
-        print(text);
-        console_putc('\n');
-    } else if (starts_icase(cmd, "TYPE")) {
-        char *name = cmd + 4;
-        name = skip_spaces(name);
-        if (*name) {
-            cmd_type(name);
-        } else {
-            print("Usage: TYPE filename\n");
-        }
-    } else {
-        print("Bad command or file name\n");
-    }
-}
-
-static void run_autoexec(void) {
+static void run_script_file(const char *name) {
     uint32_t len = 0;
-    if (!fs_read_file("AUTOEXEC.BAT", file_buffer, sizeof(file_buffer) - 1u, &len)) {
-        return;
-    }
-    file_buffer[len] = 0;
-
     char cmd[128];
     uint32_t pos = 0;
+    uint8_t *script;
+
+    if (script_depth >= MAX_SCRIPT_DEPTH) {
+        print("Batch nesting too deep\n");
+        return;
+    }
+    script = script_buffers[script_depth];
+    if (!fs_read_file(name, script, sizeof(script_buffers[0]) - 1u, &len)) {
+        print("Batch file not found or too large\n");
+        return;
+    }
+    script[len] = 0;
+    script_depth++;
+
     for (uint32_t i = 0; i <= len; i++) {
-        char c = (char)file_buffer[i];
+        char c = (char)script[i];
         if (c == '\r') {
             continue;
         }
         if (c == '\n' || c == 0) {
             cmd[pos] = 0;
+            trim_right(cmd);
             char *trimmed = skip_spaces(cmd);
-            if (*trimmed) {
-                print("A:\\> ");
+            if (*trimmed && upper(trimmed[0]) != ':' && !starts_icase(trimmed, "REM")) {
+                print_prompt();
                 print(trimmed);
                 print("\n");
                 execute_command(trimmed);
@@ -608,6 +858,68 @@ static void run_autoexec(void) {
             cmd[pos++] = c;
         }
     }
+
+    script_depth--;
+}
+
+static void execute_command(char *line) {
+    char *cmd = skip_spaces(line);
+    char *args;
+    trim_right(cmd);
+    if (!*cmd) {
+        return;
+    }
+    args = cmd;
+    cmd = take_token(&args);
+
+    if (str_icmp(cmd, "VER") == 0) {
+        cmd_ver();
+    } else if (str_icmp(cmd, "HELP") == 0) {
+        cmd_help(args);
+    } else if (str_icmp(cmd, "DIR") == 0 || str_icmp(cmd, "LS") == 0) {
+        cmd_dir();
+    } else if (str_icmp(cmd, "PWD") == 0 || str_icmp(cmd, "CD") == 0) {
+        print("A:\\\n");
+    } else if (str_icmp(cmd, "CLS") == 0) {
+        vga_clear();
+    } else if (str_icmp(cmd, "MEM") == 0) {
+        cmd_mem();
+    } else if (str_icmp(cmd, "INFO") == 0) {
+        cmd_info();
+    } else if (str_icmp(cmd, "DATE") == 0) {
+        cmd_date();
+    } else if (str_icmp(cmd, "TIME") == 0) {
+        cmd_time();
+    } else if (str_icmp(cmd, "COLOR") == 0) {
+        cmd_color(args);
+    } else if (str_icmp(cmd, "PROMPT") == 0) {
+        cmd_prompt(args);
+    } else if (str_icmp(cmd, "REBOOT") == 0) {
+        reboot();
+    } else if (str_icmp(cmd, "ECHO") == 0) {
+        print(args);
+        console_putc('\n');
+    } else if (str_icmp(cmd, "TYPE") == 0 || str_icmp(cmd, "CAT") == 0) {
+        if (*args) {
+            cmd_type(args);
+        } else {
+            print("Usage: TYPE filename\n");
+        }
+    } else if (str_icmp(cmd, "DUMP") == 0 || str_icmp(cmd, "HEX") == 0) {
+        cmd_dump(args);
+    } else if (str_icmp(cmd, "RUN") == 0) {
+        if (*args) {
+            run_script_file(args);
+        } else {
+            print("Usage: RUN filename\n");
+        }
+    } else {
+        print("Bad command or file name\n");
+    }
+}
+
+static void run_autoexec(void) {
+    run_script_file("AUTOEXEC.BAT");
 }
 
 void kmain(const boot_info_t *boot) {
@@ -638,9 +950,8 @@ void kmain(const boot_info_t *boot) {
     run_autoexec();
 
     for (;;) {
-        print("A:\\> ");
+        print_prompt();
         read_line(line_buffer, sizeof(line_buffer));
         execute_command(line_buffer);
     }
 }
-
