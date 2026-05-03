@@ -100,6 +100,14 @@ static bool starts_icase(const char *s, const char *prefix) {
     return true;
 }
 
+static bool is_rem_comment(const char *line) {
+    if (!starts_icase(line, "REM")) {
+        return false;
+    }
+    char next = line[3];
+    return next == 0 || next == ' ' || next == '\t';
+}
+
 static char *skip_spaces(char *s) {
     while (*s == ' ' || *s == '\t') {
         s++;
@@ -936,7 +944,7 @@ static void run_script_file(const char *name) {
             cmd[pos] = 0;
             trim_right(cmd);
             char *trimmed = skip_spaces(cmd);
-            if (*trimmed && upper(trimmed[0]) != ':' && !starts_icase(trimmed, "REM")) {
+            if (*trimmed && upper(trimmed[0]) != ':' && !is_rem_comment(trimmed)) {
                 print_prompt();
                 print(trimmed);
                 print("\n");
