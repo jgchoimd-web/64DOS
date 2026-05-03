@@ -71,7 +71,7 @@ python3 scripts/qemu-smoke.py dist/64dos.img
 
 ## Executable Format
 
-`RUN filename` can execute dedicated RFS executables in `*.RXE` format (for example, `DEMO.RXE`).
+`RUN filename` can execute dedicated RFS executables in `*.RXE` format (for example, `DEMO.RXE`). Legacy DOS `*.COM` and `*.EXE` binaries are not supported.
 
 ## Script Language
 
