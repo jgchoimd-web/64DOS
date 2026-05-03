@@ -69,6 +69,10 @@ python3 scripts/qemu-smoke.py dist/64dos.img
 
 64DOS boots with a DOS-style `RFS:\>` prompt. RFS is the system's real 64-bit runtime filesystem (not a virtualized overlay and not read-only). Repository metadata can be explored with `RFSREFS`, `PKG`, and `VCS`, and regular file content can be accessed with `DIR` and `TYPE`.
 
+## Executable Format
+
+`RUN filename` can execute dedicated RFS executables in `*.RXE` format (for example, `DEMO.RXE`). Legacy DOS `*.COM` and `*.EXE` binaries are not supported.
+
 ## Script Language
 
 Use `SCRIPT filename` to execute line-based instructions from an RFS path at runtime.
@@ -78,7 +82,7 @@ Supported script instructions:
 - `SET`
 - `ADD`
 - `PRINT`
-- `RUN`
+- `RUN` (including `*.RXE` dedicated executable files)
 
 ## Layout
 
