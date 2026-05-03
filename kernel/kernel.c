@@ -1,6 +1,7 @@
 #include "bootinfo.h"
 #include "fs_fat12.h"
 #include "fs_iface.h"
+#include "executable.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -59,10 +60,6 @@ static inline uint8_t inb(uint16_t port) {
     uint8_t value;
     __asm__ volatile("inb %1, %0" : "=a"(value) : "Nd"(port));
     return value;
-}
-
-static uint16_t rd16(const uint8_t *p) {
-    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
 }
 
 static uint32_t str_len(const char *s) {
@@ -592,29 +589,22 @@ static void cmd_vcs(char *args) {
     print("VCS: unknown operation\n");
 }
 
-static bool fs_init(const uint8_t *image, uint32_t image_size) {
-    if (image_size < 512 || image[510] != 0x55 || image[511] != 0xAA) {
-        return false;
-    }
-    fs.image = image;
-    fs.image_size = image_size;
-    fs.bytes_per_sector = rd16(image + 11);
-    fs.sectors_per_cluster = image[13];
-    fs.reserved_sectors = rd16(image + 14);
-    fs.fat_count = image[16];
-    fs.root_entries = rd16(image + 17);
-    fs.sectors_per_fat = rd16(image + 22);
+static bool fs_mount_image(const uint8_t *image, uint32_t image_size) {
+    const fs_driver_t *drivers[] = {
+        fs_fat12_driver(),
+    };
 
-    if (fs.bytes_per_sector != 512 || fs.sectors_per_cluster == 0 ||
-        fs.fat_count == 0 || fs.root_entries == 0 || fs.sectors_per_fat == 0) {
-        return false;
+    for (uint32_t i = 0; i < (uint32_t)(sizeof(drivers) / sizeof(drivers[0])); i++) {
+        const fs_driver_t *driver = drivers[i];
+        if (!driver->probe(image, image_size)) {
+            continue;
+        }
+        if (driver->mount(image, image_size, &g_fs)) {
+            g_fs->get_info(&g_fs_info);
+            return true;
+        }
     }
-
-    fs.root_lba = fs.reserved_sectors + (uint32_t)fs.fat_count * fs.sectors_per_fat;
-    fs.root_sectors = ((uint32_t)fs.root_entries * 32u + fs.bytes_per_sector - 1u) /
-                      fs.bytes_per_sector;
-    fs.data_lba = fs.root_lba + fs.root_sectors;
-    return fs.data_lba * 512u < image_size;
+    return false;
 }
 
 static bool fs_read_file(const char *name, uint8_t *buf, uint32_t max_len, uint32_t *out_len) {
