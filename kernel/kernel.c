@@ -399,11 +399,203 @@ static void read_line(char *buf, uint32_t cap) {
     }
 }
 
-static bool fs_mount_image(const uint8_t *image, uint32_t image_size) {
-    const fs_driver_t *drivers[] = { fs_fat12_driver() };
-    for (uint32_t i = 0; i < sizeof(drivers) / sizeof(drivers[0]); i++) {
-        if (!drivers[i]->probe(image, image_size)) continue;
-        if (drivers[i]->mount(image, image_size, &g_fs)) { g_fs->get_info(&g_fs_info); return true; }
+
+static const char vfs_about_txt[] =
+    "64DOS virtual SYS filesystem\n"
+    "- read-only built-in files\n"
+    "- use paths like SYS:\\ABOUT.TXT\n";
+
+static const uint8_t vfs_demo_rxe[] = {
+    '6','4','E','X',
+    'E','C','H','O',' ','H','e','l','l','o',' ','f','r','o','m',' ','R','X','E','\n',
+    'D','I','R','\n'
+};
+
+typedef struct vfs_file {
+    const char *name;
+    const uint8_t *data;
+    uint32_t len;
+} vfs_file_t;
+
+static const vfs_file_t vfs_files[] = {
+    { "ABOUT.TXT", (const uint8_t *)vfs_about_txt, (uint32_t)(sizeof(vfs_about_txt) - 1u) },
+    { "DEMO.RXE", vfs_demo_rxe, (uint32_t)sizeof(vfs_demo_rxe) },
+};
+
+static const char *strip_sys_prefix(const char *name) {
+    if (upper(name[0]) == 'S' && upper(name[1]) == 'Y' && upper(name[2]) == 'S' &&
+        name[3] == ':' && (name[4] == '\\' || name[4] == '/')) {
+        return name + 5;
+    }
+    if (upper(name[0]) == 'S' && upper(name[1]) == 'Y' && upper(name[2]) == 'S' &&
+        (name[3] == '\\' || name[3] == '/')) {
+        return name + 4;
+    }
+    return NULL;
+}
+
+static const vfs_file_t *vfs_find_file(const char *name) {
+    const char *base = strip_sys_prefix(name);
+    if (!base) return NULL;
+    for (uint32_t i = 0; i < (uint32_t)(sizeof(vfs_files) / sizeof(vfs_files[0])); i++) {
+        if (str_icmp(base, vfs_files[i].name) == 0) return &vfs_files[i];
+    }
+    return NULL;
+}
+
+static bool fs_init(const uint8_t *image, uint32_t image_size) {
+    if (image_size < 512 || image[510] != 0x55 || image[511] != 0xAA) {
+        return false;
+    }
+    fs.image = image;
+    fs.image_size = image_size;
+    fs.bytes_per_sector = rd16(image + 11);
+    fs.sectors_per_cluster = image[13];
+    fs.reserved_sectors = rd16(image + 14);
+    fs.fat_count = image[16];
+    fs.root_entries = rd16(image + 17);
+    fs.sectors_per_fat = rd16(image + 22);
+
+    if (fs.bytes_per_sector != 512 || fs.sectors_per_cluster == 0 ||
+        fs.fat_count == 0 || fs.root_entries == 0 || fs.sectors_per_fat == 0) {
+        return false;
+    }
+
+    fs.root_lba = fs.reserved_sectors + (uint32_t)fs.fat_count * fs.sectors_per_fat;
+    fs.root_sectors = ((uint32_t)fs.root_entries * 32u + fs.bytes_per_sector - 1u) /
+                      fs.bytes_per_sector;
+    fs.data_lba = fs.root_lba + fs.root_sectors;
+    return fs.data_lba * 512u < image_size;
+}
+
+static bool make_83(const char *name, char out[11]) {
+    for (uint32_t i = 0; i < 11; i++) {
+        out[i] = ' ';
+    }
+
+    if (name[0] == 'A' && name[1] == ':' && (name[2] == '\\' || name[2] == '/')) {
+        name += 3;
+    }
+    while (*name == '\\' || *name == '/') {
+        name++;
+    }
+
+    uint32_t i = 0;
+    while (*name && *name != '.' && *name != ' ' && *name != '\t') {
+        if (i >= 8) {
+            return false;
+        }
+        out[i++] = upper(*name++);
+    }
+
+    if (*name == '.') {
+        name++;
+        i = 8;
+        while (*name && *name != ' ' && *name != '\t') {
+            if (i >= 11) {
+                return false;
+            }
+            out[i++] = upper(*name++);
+        }
+    }
+
+    return out[0] != ' ';
+}
+
+static const uint8_t *root_entry(uint32_t index) {
+    return fs.image + (fs.root_lba * 512u) + index * 32u;
+}
+
+static uint16_t fat_next(uint16_t cluster) {
+    const uint8_t *fat = fs.image + fs.reserved_sectors * 512u;
+    uint32_t offset = cluster + (cluster / 2u);
+    uint16_t value = (uint16_t)fat[offset] | ((uint16_t)fat[offset + 1] << 8);
+    if (cluster & 1u) {
+        value >>= 4;
+    } else {
+        value &= 0x0FFFu;
+    }
+    return value;
+}
+
+static const uint8_t *find_root_file(const char *name) {
+    char dos_name[11];
+    if (!make_83(name, dos_name)) {
+        return NULL;
+    }
+
+    for (uint32_t i = 0; i < fs.root_entries; i++) {
+        const uint8_t *e = root_entry(i);
+        if (e[0] == 0x00) {
+            return NULL;
+        }
+        if (e[0] == 0xE5 || (e[11] & 0x08) || (e[11] & 0x10)) {
+            continue;
+        }
+        bool same = true;
+        for (uint32_t j = 0; j < 11; j++) {
+            if ((char)e[j] != dos_name[j]) {
+                same = false;
+                break;
+            }
+        }
+        if (same) {
+            return e;
+        }
+    }
+    return NULL;
+}
+
+static bool fs_read_file(const char *name, uint8_t *buf, uint32_t max_len, uint32_t *out_len) {
+    const vfs_file_t *vf = vfs_find_file(name);
+    if (vf) {
+        uint32_t n = vf->len < max_len ? vf->len : max_len;
+        for (uint32_t i = 0; i < n; i++) buf[i] = vf->data[i];
+        *out_len = n;
+        return n == vf->len;
+    }
+    const uint8_t *e = find_root_file(name);
+    if (!e) {
+        return false;
+    }
+
+    uint32_t size = rd32(e + 28);
+    uint32_t copied = 0;
+    uint16_t cluster = rd16(e + 26);
+
+    while (cluster >= 2 && cluster < 0xFF8 && copied < size && copied < max_len) {
+        uint32_t lba = fs.data_lba + ((uint32_t)cluster - 2u) * fs.sectors_per_cluster;
+        uint32_t offset = lba * 512u;
+        uint32_t chunk = (uint32_t)fs.sectors_per_cluster * 512u;
+        if (offset + chunk > fs.image_size) {
+            break;
+        }
+        if (chunk > size - copied) {
+            chunk = size - copied;
+        }
+        if (chunk > max_len - copied) {
+            chunk = max_len - copied;
+        }
+        for (uint32_t i = 0; i < chunk; i++) {
+            buf[copied + i] = fs.image[offset + i];
+        }
+        copied += chunk;
+        cluster = fat_next(cluster);
+    }
+
+    *out_len = copied;
+    return copied == size || copied == max_len;
+}
+
+static void print_root_name(const uint8_t *e) {
+    for (uint32_t i = 0; i < 8 && e[i] != ' '; i++) {
+        console_putc((char)e[i]);
+    }
+    if (e[8] != ' ') {
+        console_putc('.');
+        for (uint32_t i = 8; i < 11 && e[i] != ' '; i++) {
+            console_putc((char)e[i]);
+        }
     }
     return false;
 }
@@ -418,10 +610,30 @@ static void cmd_dir(void) {
         while (name_len++ < 14) console_putc(' ');
         print_dec(entry.size); print(" bytes\n"); files++; bytes += entry.size;
     }
-    print("\n"); print_dec(files); print(" file(s)  "); print_dec(bytes); print(" bytes\n");
+    print("\n");
+    print_dec(files);
+    print(" file(s)  ");
+    print_dec(bytes);
+    print(" bytes\n");
+    print("\n Directory of SYS:\\
+\n");
+    for (uint32_t i = 0; i < (uint32_t)(sizeof(vfs_files) / sizeof(vfs_files[0])); i++) {
+        print(vfs_files[i].name);
+        print("    ");
+        print_dec(vfs_files[i].len);
+        print(" bytes\n");
+    }
 }
 
-static uint32_t fs_file_size(const char *name) { fs_stat_t st; return g_fs->stat(name,&st)?st.size:0xFFFFFFFFu; }
+static uint32_t fs_file_size(const char *name) {
+    const vfs_file_t *vf = vfs_find_file(name);
+    if (vf) return vf->len;
+    const uint8_t *e = find_root_file(name);
+    if (!e) {
+        return 0xFFFFFFFFu;
+    }
+    return rd32(e + 28);
+}
 
 static void cmd_type(const char *name) {
     uint32_t len = 0;
@@ -883,77 +1095,35 @@ static void reboot(void) {
     }
 }
 
-static bool has_ext(const char *name, const char *ext) {
-    const char *dot = 0;
-    while (*name) {
-        if (*name == '.') {
-            dot = name;
-        }
-        name++;
-    }
-    return dot && str_icmp(dot, ext) == 0;
-}
-
-static bool executable_header_valid(const executable_header_t *hdr, uint32_t len) {
-    uint32_t end;
-    if (hdr->magic != EXECUTABLE_MAGIC || hdr->version != EXECUTABLE_VERSION ||
-        hdr->header_size < sizeof(executable_header_t)) {
-        return false;
-    }
-    if ((hdr->entry_offset & (EXEC_IMAGE_ALIGN - 1u)) != 0u ||
-        (hdr->code_size & (EXEC_IMAGE_ALIGN - 1u)) != 0u) {
-        return false;
-    }
-    if (hdr->entry_offset < hdr->header_size) {
-        return false;
-    }
-    if (hdr->code_size > len || hdr->entry_offset > len) {
-        return false;
-    }
-    end = hdr->entry_offset + hdr->code_size;
-    if (end < hdr->entry_offset || end > len) {
-        return false;
-    }
-    return true;
-}
-
-static void run_binary_file(const char *name) {
+static void run_rxe_file(const char *name) {
     uint32_t len = 0;
-    executable_header_t *hdr = (executable_header_t *)file_buffer;
-    uintptr_t entry_addr;
-    exec_entry_fn_t entry;
-
-    if (!fs_read_file(name, file_buffer, MAX_BINARY_FILE_SIZE, &len)) {
-        print("Binary file not found or too large\n");
+    char cmd[128];
+    uint32_t pos = 0;
+    uint8_t *payload;
+    if (!fs_read_file(name, file_buffer, sizeof(file_buffer) - 1u, &len)) {
+        print("Executable not found or too large\n");
         return;
     }
-    if (len < sizeof(executable_header_t) || !executable_header_valid(hdr, len)) {
-        print("Invalid executable header\n");
+    if (len < 4 || file_buffer[0] != '6' || file_buffer[1] != '4' || file_buffer[2] != 'E' || file_buffer[3] != 'X') {
+        print("Invalid RXE header\n");
         return;
     }
-    if (hdr->checksum != 0u) {
-        uint32_t sum = 0;
-        for (uint32_t i = 0; i < len; i++) {
-            sum += file_buffer[i];
+    payload = file_buffer + 4;
+    len -= 4;
+    payload[len] = 0;
+    for (uint32_t i = 0; i <= len; i++) {
+        char c = (char)payload[i];
+        if (c == '\r') continue;
+        if (c == '\n' || c == 0) {
+            cmd[pos] = 0;
+            trim_right(cmd);
+            char *trimmed = skip_spaces(cmd);
+            if (*trimmed) execute_command(trimmed);
+            pos = 0;
+        } else if (pos + 1 < sizeof(cmd)) {
+            cmd[pos++] = c;
         }
-        if (sum != hdr->checksum) {
-            print("Checksum mismatch\n");
-            return;
-        }
     }
-
-    entry_addr = (uintptr_t)file_buffer + (uintptr_t)hdr->entry_offset;
-    if (entry_addr < (uintptr_t)file_buffer || entry_addr >= (uintptr_t)(file_buffer + len)) {
-        print("Entry out of range\n");
-        return;
-    }
-
-    /* ABI: entry(header, image_base)
-     * - header points to validated executable_header_t.
-     * - image_base points to the first byte of the loaded executable image.
-     */
-    entry = (exec_entry_fn_t)entry_addr;
-    entry(hdr, file_buffer);
 }
 
 static void run_script_file(const char *name) {
@@ -1053,13 +1223,9 @@ static void execute_command(char *line) {
         cmd_stat(args);
     } else if (str_icmp(cmd, "RUN") == 0) {
         if (*args) {
-            uint32_t len = 0;
-            if (has_ext(args, ".BAT") || has_ext(args, ".CMD")) {
-                run_script_file(args);
-            } else if (fs_read_file(args, file_buffer, sizeof(file_buffer), &len) &&
-                       len >= sizeof(executable_header_t) &&
-                       ((executable_header_t *)file_buffer)->magic == EXECUTABLE_MAGIC) {
-                run_binary_file(args);
+            uint32_t n = str_len(args);
+            if (n >= 4 && upper(args[n - 1]) == 'E' && upper(args[n - 2]) == 'X' && upper(args[n - 3]) == 'R' && args[n - 4] == '.') {
+                run_rxe_file(args);
             } else {
                 run_script_file(args);
             }
