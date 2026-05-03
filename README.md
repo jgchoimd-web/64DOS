@@ -12,9 +12,10 @@ The first release is intentionally small:
 - VGA text console with serial output mirrored to COM1.
 - Serial input for automation and PS/2 keyboard input for manual use.
 - Read-only FAT12 `A:\` filesystem from the RAM-loaded floppy image.
+- Built-in virtual `RFS:\` repository view for demo content and metadata inspection.
 - Built-in commands: `VER`, `HELP`, `DIR`/`LS`, `TYPE`/`CAT`, `DUMP`/`HEX`,
   `WC`, `RUN`, `SCRIPT`, `DATE`, `TIME`, `COLOR`, `PROMPT`, `PWD`, `CLS`, `MEM`/`INFO`,
-  `ECHO`, `PAUSE`, `BEEP`, `REBOOT`.
+  `ECHO`, `PAUSE`, `BEEP`, `REBOOT`, `RFSREFS`, `PKG`, `VCS`.
 
 Legacy 16-bit DOS `.COM` and `.EXE` compatibility is out of scope for v1.
 
@@ -64,6 +65,10 @@ CI-style serial-only boot:
 ```sh
 python3 scripts/qemu-smoke.py dist/64dos.img
 ```
+
+## RFS Notes
+
+64DOS boots with a DOS-style `RFS:\>` prompt. In this build, `RFS:` is an in-memory, read-only virtual repository namespace (separate from FAT12 `A:`). You can inspect it with `DIR`, `TYPE`, and `RFSREFS`.
 
 ## Script Language
 
