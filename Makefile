@@ -1,8 +1,8 @@
 PYTHON ?= python3
 NASM ?= nasm
 CC ?= gcc
-LD ?= ld
-OBJCOPY ?= objcopy
+LD ?= $(shell command -v ld 2>/dev/null || command -v x86_64-elf-ld 2>/dev/null || printf '%s' ld)
+OBJCOPY ?= $(shell command -v objcopy 2>/dev/null || command -v x86_64-elf-objcopy 2>/dev/null || printf '%s' objcopy)
 QEMU ?= qemu-system-x86_64
 
 BUILD := build
