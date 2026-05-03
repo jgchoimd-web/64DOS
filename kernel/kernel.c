@@ -760,8 +760,8 @@ static void cmd_prompt(char *args) {
 static void cmd_help(char *topic) {
     topic = skip_spaces(topic);
     if (!*topic) {
-        print("Commands: VER HELP DIR/LS TYPE/CAT DUMP/HEX RUN CLS MEM/INFO\n");
-        print("          DATE TIME COLOR PROMPT PWD ECHO EXIT REBOOT\n");
+        print("Commands: VER HELP DIR/LS TYPE/CAT DUMP/HEX RUN CLS/CLEAR MEM/INFO\n");
+        print("          DATE TIME COLOR PROMPT PWD/CD ECHO EXIT REBOOT/RESET\n");
         return;
     }
     if (str_icmp(topic, "DUMP") == 0 || str_icmp(topic, "HEX") == 0) {
@@ -884,7 +884,7 @@ static void execute_command(char *line) {
         cmd_dir();
     } else if (str_icmp(cmd, "PWD") == 0 || str_icmp(cmd, "CD") == 0) {
         print("A:\\\n");
-    } else if (str_icmp(cmd, "CLS") == 0) {
+    } else if (str_icmp(cmd, "CLS") == 0 || str_icmp(cmd, "CLEAR") == 0) {
         vga_clear();
     } else if (str_icmp(cmd, "MEM") == 0) {
         cmd_mem();
@@ -898,7 +898,7 @@ static void execute_command(char *line) {
         cmd_color(args);
     } else if (str_icmp(cmd, "PROMPT") == 0) {
         cmd_prompt(args);
-    } else if (str_icmp(cmd, "EXIT") == 0 || str_icmp(cmd, "REBOOT") == 0) {
+    } else if (str_icmp(cmd, "EXIT") == 0 || str_icmp(cmd, "REBOOT") == 0 || str_icmp(cmd, "RESET") == 0) {
         reboot();
     } else if (str_icmp(cmd, "ECHO") == 0) {
         print(args);
