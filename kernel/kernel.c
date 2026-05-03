@@ -429,6 +429,18 @@ typedef struct rfs_ref {
     uint64_t commit_oid;
 } rfs_ref_t;
 
+typedef struct pkg_entry {
+    const char *name;
+    const char *version;
+    const char *desc;
+    bool installed;
+} pkg_entry_t;
+
+typedef struct vcs_commit {
+    uint64_t id;
+    const char *msg;
+} vcs_commit_t;
+
 static const rfs_blob_t rfs_blobs[] = {
     { 0x1000000000000001ull, (const uint8_t *)rfs_readme_txt, (uint32_t)(sizeof(rfs_readme_txt) - 1u) },
     { 0x1000000000000002ull, rfs_demo_rxe, (uint32_t)sizeof(rfs_demo_rxe) },
@@ -438,6 +450,20 @@ static const rfs_ref_t rfs_refs[] = {
     { "HEAD", 0x3000000000000001ull },
     { "refs/heads/main", 0x3000000000000001ull },
 };
+
+static pkg_entry_t pkg_db[] = {
+    { "BASE", "1.0.0", "core shell package", true },
+    { "NET", "0.1.0", "network utilities pack", false },
+    { "DEV", "0.1.0", "developer tools pack", false },
+};
+
+static vcs_commit_t vcs_log[8] = {
+    { 0x3000000000000001ull, "init: bootstrap RFS repository" },
+};
+static char vcs_msgs[8][64];
+static uint32_t vcs_log_count = 1;
+static const char *vcs_branch = "main";
+static bool vcs_dirty;
 
 static const char *strip_rfs_prefix(const char *name) {
     if (upper(name[0]) == 'R' && upper(name[1]) == 'F' && upper(name[2]) == 'S' &&
@@ -460,6 +486,110 @@ static const rfs_file_t *rfs_find_file(const char *name) {
     if (str_icmp(base, "OBJECTS/1000000000000001.BLOB") == 0) return &rfs_files[0];
     if (str_icmp(base, "OBJECTS/1000000000000002.BLOB") == 0) return &rfs_files[1];
     return NULL;
+}
+
+static void cmd_pkg(char *args) {
+    char *op = take_token(&args);
+    char *name = take_token(&args);
+    if (!*op) {
+        print("Usage: PKG LIST | PKG INFO <name> | PKG INSTALL <name> | PKG REMOVE <name>\n");
+        return;
+    }
+    if (str_icmp(op, "LIST") == 0) {
+        for (uint32_t i = 0; i < (uint32_t)(sizeof(pkg_db) / sizeof(pkg_db[0])); i++) {
+            print(pkg_db[i].installed ? "[*] " : "[ ] ");
+            print(pkg_db[i].name);
+            print(" ");
+            print(pkg_db[i].version);
+            print(" - ");
+            print(pkg_db[i].desc);
+            print("\n");
+        }
+        return;
+    }
+    if (!*name) {
+        print("PKG: package name required\n");
+        return;
+    }
+    for (uint32_t i = 0; i < (uint32_t)(sizeof(pkg_db) / sizeof(pkg_db[0])); i++) {
+        if (str_icmp(name, pkg_db[i].name) != 0) {
+            continue;
+        }
+        if (str_icmp(op, "INFO") == 0) {
+            print(pkg_db[i].name); print(" "); print(pkg_db[i].version); print("\n");
+            print(pkg_db[i].desc); print("\n");
+            print(pkg_db[i].installed ? "installed\n" : "not installed\n");
+            return;
+        } else if (str_icmp(op, "INSTALL") == 0) {
+            pkg_db[i].installed = true;
+            print("Installed "); print(pkg_db[i].name); print("\n");
+            return;
+        } else if (str_icmp(op, "REMOVE") == 0) {
+            if (str_icmp(pkg_db[i].name, "BASE") == 0) {
+                print("PKG: BASE cannot be removed\n");
+                return;
+            }
+            pkg_db[i].installed = false;
+            print("Removed "); print(pkg_db[i].name); print("\n");
+            return;
+        }
+        print("PKG: unknown operation\n");
+        return;
+    }
+    print("PKG: package not found\n");
+}
+
+static void cmd_vcs(char *args) {
+    char *op = take_token(&args);
+    if (!*op) {
+        print("Usage: VCS STATUS | VCS LOG | VCS BRANCH | VCS COMMIT <message>\n");
+        return;
+    }
+    if (str_icmp(op, "STATUS") == 0) {
+        print("On branch ");
+        print(vcs_branch);
+        print("\n");
+        print(vcs_dirty ? "Changes pending commit\n" : "Working tree clean\n");
+        return;
+    }
+    if (str_icmp(op, "BRANCH") == 0) {
+        print("* ");
+        print(vcs_branch);
+        print("\n");
+        return;
+    }
+    if (str_icmp(op, "LOG") == 0) {
+        for (uint32_t i = 0; i < vcs_log_count; i++) {
+            uint32_t idx = vcs_log_count - 1u - i;
+            print_hex32((uint32_t)(vcs_log[idx].id >> 32));
+            print_hex32((uint32_t)(vcs_log[idx].id & 0xFFFFFFFFu));
+            print(" ");
+            print(vcs_log[idx].msg);
+            print("\n");
+        }
+        return;
+    }
+    if (str_icmp(op, "COMMIT") == 0) {
+        args = skip_spaces(args);
+        if (!*args) {
+            print("VCS: commit message required\n");
+            return;
+        }
+        if (vcs_log_count >= (uint32_t)(sizeof(vcs_log) / sizeof(vcs_log[0]))) {
+            print("VCS: log is full\n");
+            return;
+        }
+        copy_text(vcs_msgs[vcs_log_count], sizeof(vcs_msgs[0]), args);
+        vcs_log[vcs_log_count].id = 0x3000000000000001ull + (uint64_t)vcs_log_count;
+        vcs_log[vcs_log_count].msg = vcs_msgs[vcs_log_count];
+        vcs_log_count++;
+        vcs_dirty = false;
+        print("Committed: ");
+        print(args);
+        print("\n");
+        return;
+    }
+    print("VCS: unknown operation\n");
 }
 
 static bool fs_init(const uint8_t *image, uint32_t image_size) {
@@ -714,11 +844,7 @@ static void cmd_time(void) {
     print_2(rtc.minute);
     console_putc(':');
     print_2(rtc.second);
-    print("\nRFS refs ");
-    print_dec((uint32_t)(sizeof(rfs_refs) / sizeof(rfs_refs[0])));
-    print(", blobs ");
-    print_dec((uint32_t)(sizeof(rfs_blobs) / sizeof(rfs_blobs[0])));
-    print("\n");
+    console_putc('\n');
 }
 
 static void cmd_color(char *args) {
@@ -762,6 +888,18 @@ static void cmd_prompt(char *args) {
     print(", blobs ");
     print_dec((uint32_t)(sizeof(rfs_blobs) / sizeof(rfs_blobs[0])));
     print("\n");
+}
+
+static void cmd_rfsrefs(void) {
+    print("RFS references\n");
+    for (uint32_t i = 0; i < (uint32_t)(sizeof(rfs_refs) / sizeof(rfs_refs[0])); i++) {
+        print("  ");
+        print(rfs_refs[i].name);
+        print(" -> ");
+        print_hex32((uint32_t)(rfs_refs[i].commit_oid >> 32));
+        print_hex32((uint32_t)(rfs_refs[i].commit_oid & 0xFFFFFFFFu));
+        print("\n");
+    }
 }
 
 static void cmd_pause(void) {
@@ -912,7 +1050,7 @@ fail:
 static void cmd_help(char *topic) {
     topic = skip_spaces(topic);
     if (!*topic) {
-        print("Commands: VER HELP DIR/LS TYPE/CAT DUMP/HEX WC RUN SCRIPT CLS MEM/INFO\n");
+        print("Commands: VER HELP DIR/LS TYPE/CAT DUMP/HEX WC RUN SCRIPT CLS MEM/INFO RFSREFS PKG VCS\n");
         print("          DATE TIME COLOR PROMPT PWD ECHO PAUSE BEEP EXIT REBOOT\n");
         return;
     }
@@ -935,6 +1073,12 @@ static void cmd_help(char *topic) {
         print("PAUSE - wait for Enter before continuing\n");
     } else if (str_icmp(topic, "BEEP") == 0) {
         print("BEEP - emit an ASCII bell on the active console\n");
+    } else if (str_icmp(topic, "RFSREFS") == 0) {
+        print("RFSREFS - show git-style refs and 64-bit commit IDs\n");
+    } else if (str_icmp(topic, "PKG") == 0) {
+        print("PKG - proprietary package manager (LIST/INFO/INSTALL/REMOVE)\n");
+    } else if (str_icmp(topic, "VCS") == 0) {
+        print("VCS - proprietary version control (STATUS/LOG/BRANCH/COMMIT)\n");
     } else {
         print("No detailed help for that command\n");
     }
@@ -1126,6 +1270,12 @@ static void execute_command(char *line) {
         }
     } else if (str_icmp(cmd, "SCRIPT") == 0) {
         cmd_script(args);
+    } else if (str_icmp(cmd, "RFSREFS") == 0) {
+        cmd_rfsrefs();
+    } else if (str_icmp(cmd, "PKG") == 0) {
+        cmd_pkg(args);
+    } else if (str_icmp(cmd, "VCS") == 0) {
+        cmd_vcs(args);
     } else {
         print("Bad command or file name\n");
     }
