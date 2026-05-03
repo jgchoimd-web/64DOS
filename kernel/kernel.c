@@ -1,6 +1,7 @@
 #include "bootinfo.h"
 #include "fs_fat12.h"
 #include "fs_iface.h"
+#include "executable.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -50,6 +51,10 @@ static uint8_t script_buffers[MAX_SCRIPT_DEPTH][8192];
 typedef void (*exec_entry_fn_t)(const executable_header_t *header, const uint8_t *image);
 
 static void execute_command(char *line);
+static bool fs_read_file(const char *name, uint8_t *buf, uint32_t max_len, uint32_t *out_len);
+static bool rfs_list_root(uint32_t *cursor, fs_root_entry_t *out_entry);
+static bool rfs_stat(const char *name, fs_stat_t *out_stat);
+static void rfs_get_info(fs_info_t *out_info);
 
 static inline void outb(uint16_t port, uint8_t value) {
     __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
@@ -592,29 +597,36 @@ static void cmd_vcs(char *args) {
     print("VCS: unknown operation\n");
 }
 
-static bool fs_init(const uint8_t *image, uint32_t image_size) {
-    if (image_size < 512 || image[510] != 0x55 || image[511] != 0xAA) {
-        return false;
-    }
-    fs.image = image;
-    fs.image_size = image_size;
-    fs.bytes_per_sector = rd16(image + 11);
-    fs.sectors_per_cluster = image[13];
-    fs.reserved_sectors = rd16(image + 14);
-    fs.fat_count = image[16];
-    fs.root_entries = rd16(image + 17);
-    fs.sectors_per_fat = rd16(image + 22);
+static bool fs_mount_image(const uint8_t *image, uint32_t image_size) {
+    (void)image;
+    (void)image_size;
+    static const fs_ops_t rfs_ops = { rfs_list_root, rfs_stat, fs_read_file, rfs_get_info };
+    g_fs = &rfs_ops;
+    g_fs->get_info(&g_fs_info);
+    return true;
+}
 
-    if (fs.bytes_per_sector != 512 || fs.sectors_per_cluster == 0 ||
-        fs.fat_count == 0 || fs.root_entries == 0 || fs.sectors_per_fat == 0) {
-        return false;
-    }
+static bool rfs_list_root(uint32_t *cursor, fs_root_entry_t *out_entry) {
+    if (*cursor >= (uint32_t)(sizeof(rfs_files) / sizeof(rfs_files[0]))) return false;
+    const rfs_file_t *f = &rfs_files[(*cursor)++];
+    copy_text(out_entry->name, sizeof(out_entry->name), f->name);
+    out_entry->size = f->len;
+    return true;
+}
 
-    fs.root_lba = fs.reserved_sectors + (uint32_t)fs.fat_count * fs.sectors_per_fat;
-    fs.root_sectors = ((uint32_t)fs.root_entries * 32u + fs.bytes_per_sector - 1u) /
-                      fs.bytes_per_sector;
-    fs.data_lba = fs.root_lba + fs.root_sectors;
-    return fs.data_lba * 512u < image_size;
+static bool rfs_stat(const char *name, fs_stat_t *out_stat) {
+    const rfs_file_t *f = rfs_find_file(name);
+    if (!f) return false;
+    out_stat->size = f->len;
+    return true;
+}
+
+static void rfs_get_info(fs_info_t *out_info) {
+    out_info->driver_name = "RFS";
+    out_info->bytes_per_sector = 512u;
+    out_info->root_entries = (uint32_t)(sizeof(rfs_files) / sizeof(rfs_files[0]));
+    out_info->root_lba = 0u;
+    out_info->data_lba = 0u;
 }
 
 static bool fs_read_file(const char *name, uint8_t *buf, uint32_t max_len, uint32_t *out_len) {
