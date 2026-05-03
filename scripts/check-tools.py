@@ -4,21 +4,23 @@
 from __future__ import annotations
 
 import argparse
+import os
+import shlex
 import shutil
 import sys
 
 TOOL_GROUPS = {
     "build": {
-        "nasm": ["nasm"],
-        "x86-64 C compiler": ["gcc", "cc", "clang"],
-        "GNU linker": ["ld", "x86_64-elf-ld"],
-        "objcopy": ["objcopy", "x86_64-elf-objcopy"],
+        "nasm": {"env": "NASM", "candidates": ["nasm"]},
+        "x86-64 C compiler": {"env": "CC", "candidates": ["gcc", "cc", "clang"]},
+        "GNU linker": {"env": "LD", "candidates": ["ld", "x86_64-elf-ld"]},
+        "objcopy": {"env": "OBJCOPY", "candidates": ["objcopy", "x86_64-elf-objcopy"]},
     },
     "smoke": {
-        "QEMU x86_64": ["qemu-system-x86_64"],
+        "QEMU x86_64": {"env": "QEMU", "candidates": ["qemu-system-x86_64"]},
     },
     "compat": {
-        "mtools": ["mcopy"],
+        "mtools": {"env": None, "candidates": ["mcopy"]},
     },
 }
 
@@ -43,18 +45,30 @@ def selected_groups(profile: str) -> list[str]:
     return [profile]
 
 
+def resolve_tool(env_name: str | None, candidates: list[str]) -> str | None:
+    if env_name and (override := os.environ.get(env_name)):
+        try:
+            cmd = shlex.split(override)[0]
+        except ValueError:
+            return None
+        return cmd if shutil.which(cmd) else None
+
+    return next((tool for tool in candidates if shutil.which(tool)), None)
+
+
 def main() -> int:
     args = parse_args()
 
     missing: list[str] = []
     for group in selected_groups(args.profile):
         print(f"[{group}]")
-        for label, candidates in TOOL_GROUPS[group].items():
-            found = next((tool for tool in candidates if shutil.which(tool)), None)
+        for label, config in TOOL_GROUPS[group].items():
+            found = resolve_tool(config["env"], config["candidates"])
             if found:
                 print(f"{label}: {found}")
             else:
-                missing.append(f"{label} ({', '.join(candidates)})")
+                env_hint = f" via ${config['env']}" if config["env"] else ""
+                missing.append(f"{label}{env_hint} ({', '.join(config['candidates'])})")
 
     if missing:
         print("Missing required tools:", file=sys.stderr)
