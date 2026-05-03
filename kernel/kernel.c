@@ -757,7 +757,7 @@ static void cmd_help(char *topic) {
     topic = skip_spaces(topic);
     if (!*topic) {
         print("Commands: VER HELP DIR/LS TYPE/CAT DUMP/HEX RUN CLS MEM/INFO\n");
-        print("          DATE TIME COLOR PROMPT PWD ECHO REBOOT\n");
+        print("          DATE TIME COLOR PROMPT PWD ECHO EXIT REBOOT\n");
         return;
     }
     if (str_icmp(topic, "DUMP") == 0 || str_icmp(topic, "HEX") == 0) {
@@ -894,7 +894,7 @@ static void execute_command(char *line) {
         cmd_color(args);
     } else if (str_icmp(cmd, "PROMPT") == 0) {
         cmd_prompt(args);
-    } else if (str_icmp(cmd, "REBOOT") == 0) {
+    } else if (str_icmp(cmd, "EXIT") == 0 || str_icmp(cmd, "REBOOT") == 0) {
         reboot();
     } else if (str_icmp(cmd, "ECHO") == 0) {
         print(args);
