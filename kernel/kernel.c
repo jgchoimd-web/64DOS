@@ -760,8 +760,9 @@ static void cmd_prompt(char *args) {
 static void cmd_help(char *topic) {
     topic = skip_spaces(topic);
     if (!*topic) {
-        print("Commands: VER HELP DIR/LS TYPE/CAT DUMP/HEX RUN CLS MEM/INFO\n");
-        print("          DATE TIME COLOR PROMPT PWD ECHO EXIT REBOOT\n");
+        print("Commands: VER/ABOUT HELP DIR/LS/LIST TYPE/CAT DUMP/HEX\n");
+        print("          RUN CLS/CLEAR MEM/INFO DATE TIME COLOR PROMPT\n");
+        print("          PWD/CD ECHO/PRINT EXIT/REBOOT\n");
         return;
     }
     if (str_icmp(topic, "DUMP") == 0 || str_icmp(topic, "HEX") == 0) {
@@ -876,15 +877,15 @@ static void execute_command(char *line) {
     args = cmd;
     cmd = take_token(&args);
 
-    if (str_icmp(cmd, "VER") == 0) {
+    if (str_icmp(cmd, "VER") == 0 || str_icmp(cmd, "ABOUT") == 0) {
         cmd_ver();
     } else if (str_icmp(cmd, "HELP") == 0) {
         cmd_help(args);
-    } else if (str_icmp(cmd, "DIR") == 0 || str_icmp(cmd, "LS") == 0) {
+    } else if (str_icmp(cmd, "DIR") == 0 || str_icmp(cmd, "LS") == 0 || str_icmp(cmd, "LIST") == 0) {
         cmd_dir();
     } else if (str_icmp(cmd, "PWD") == 0 || str_icmp(cmd, "CD") == 0) {
         print("A:\\\n");
-    } else if (str_icmp(cmd, "CLS") == 0) {
+    } else if (str_icmp(cmd, "CLS") == 0 || str_icmp(cmd, "CLEAR") == 0) {
         vga_clear();
     } else if (str_icmp(cmd, "MEM") == 0) {
         cmd_mem();
@@ -900,7 +901,7 @@ static void execute_command(char *line) {
         cmd_prompt(args);
     } else if (str_icmp(cmd, "EXIT") == 0 || str_icmp(cmd, "REBOOT") == 0) {
         reboot();
-    } else if (str_icmp(cmd, "ECHO") == 0) {
+    } else if (str_icmp(cmd, "ECHO") == 0 || str_icmp(cmd, "PRINT") == 0) {
         print(args);
         console_putc('\n');
     } else if (str_icmp(cmd, "TYPE") == 0 || str_icmp(cmd, "CAT") == 0) {
