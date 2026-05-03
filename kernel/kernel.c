@@ -692,6 +692,24 @@ static void cmd_wc(char *args) {
     print(" byte(s)\n");
 }
 
+static void cmd_stat(char *args) {
+    char *name = take_token(&args);
+    uint32_t size;
+    if (!*name) {
+        print("Usage: STAT filename\n");
+        return;
+    }
+    size = fs_file_size(name);
+    if (size == 0xFFFFFFFFu) {
+        print("File not found\n");
+        return;
+    }
+    print(name);
+    print(": ");
+    print_dec(size);
+    print(" byte(s)\n");
+}
+
 static uint8_t cmos_read(uint8_t reg) {
     outb(0x70, reg);
     return inb(0x71);
@@ -827,6 +845,8 @@ static void cmd_help(char *topic) {
         print("DUMP filename [bytes] - show file bytes in hex and ASCII\n");
     } else if (str_icmp(topic, "WC") == 0) {
         print("WC filename - count lines, words, and bytes in a file\n");
+    } else if (str_icmp(topic, "STAT") == 0) {
+        print("STAT filename - show file size in bytes\n");
     } else if (str_icmp(topic, "RUN") == 0) {
         print("RUN filename - run a root-directory batch file, one command per line\n");
     } else if (str_icmp(topic, "COLOR") == 0) {
@@ -982,6 +1002,8 @@ static void execute_command(char *line) {
         cmd_dump(args);
     } else if (str_icmp(cmd, "WC") == 0) {
         cmd_wc(args);
+    } else if (str_icmp(cmd, "STAT") == 0) {
+        cmd_stat(args);
     } else if (str_icmp(cmd, "RUN") == 0) {
         if (*args) {
             run_script_file(args);
