@@ -13,7 +13,7 @@ The first release is intentionally small:
 - Serial input for automation and PS/2 keyboard input for manual use.
 - Read-only FAT12 `A:\` filesystem from the RAM-loaded floppy image.
 - Built-in commands: `VER`, `HELP`, `DIR`/`LS`, `TYPE`/`CAT`, `DUMP`/`HEX`,
-  `RUN`, `DATE`, `TIME`, `COLOR`, `PROMPT`, `PWD`, `CLS`, `MEM`/`INFO`,
+  `WC`, `RUN`, `DATE`, `TIME`, `COLOR`, `PROMPT`, `PWD`, `CLS`, `MEM`/`INFO`,
   `ECHO`, `REBOOT`.
 
 Legacy 16-bit DOS `.COM` and `.EXE` compatibility is out of scope for v1.
