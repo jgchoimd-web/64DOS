@@ -1,9 +1,8 @@
 # 64DOS
 
 64DOS is a tiny public-domain DOS-style operating system for BIOS-booted
-x86-64 PCs. It boots from a 1.44 MB FAT12 floppy image, switches from BIOS
-real mode into long mode, and runs a native 64-bit kernel with a small
-COMMAND-style shell.
+x86-64 PCs. It boots from BIOS real mode into long mode and runs a native
+64-bit kernel with a small COMMAND-style shell centered around RFS.
 
 The first release is intentionally small:
 
@@ -11,10 +10,11 @@ The first release is intentionally small:
 - Native x86-64 long-mode kernel.
 - VGA text console with serial output mirrored to COM1.
 - Serial input for automation and PS/2 keyboard input for manual use.
-- Read-only FAT12 `A:\` filesystem from the RAM-loaded floppy image.
+- Native 64-bit RFS filesystem as the primary runtime filesystem.
+- VCS-oriented RFS data model with repository-style inspection commands.
 - Built-in commands: `VER`, `HELP`, `DIR`/`LS`, `TYPE`/`CAT`, `DUMP`/`HEX`,
   `WC`, `RUN`, `SCRIPT`, `DATE`, `TIME`, `COLOR`, `PROMPT`, `PWD`, `CLS`, `MEM`/`INFO`,
-  `ECHO`, `PAUSE`, `BEEP`, `REBOOT`.
+  `ECHO`, `PAUSE`, `BEEP`, `REBOOT`, `RFSREFS`, `PKG`, `VCS`.
 
 Legacy 16-bit DOS `.COM` and `.EXE` compatibility is out of scope for v1.
 
@@ -53,15 +53,32 @@ It is always exactly `1,474,560` bytes.
 
 ## Run
 
+Interactive (curses + serial mirrored to stdout):
+
 ```sh
 qemu-system-x86_64 -drive file=dist/64dos.img,format=raw,if=floppy -boot a -serial stdio -display curses
 ```
 
-For CI-style serial-only boot:
+CI-style serial-only boot:
 
 ```sh
 python3 scripts/qemu-smoke.py dist/64dos.img
 ```
+
+## RFS Notes
+
+64DOS boots with a DOS-style `RFS:\>` prompt. RFS is the system's real 64-bit runtime filesystem (not a virtualized overlay and not read-only). Repository metadata can be explored with `RFSREFS`, `PKG`, and `VCS`, and regular file content can be accessed with `DIR` and `TYPE`.
+
+## Script Language
+
+Use `SCRIPT filename` to execute line-based instructions from an RFS path at runtime.
+
+Supported script instructions:
+
+- `SET`
+- `ADD`
+- `PRINT`
+- `RUN`
 
 ## Layout
 
@@ -77,6 +94,3 @@ python3 scripts/qemu-smoke.py dist/64dos.img
 64DOS is released under the Unlicense. PDOS provenance is documented in
 `UPSTREAM.md`; this repository does not import GPL, FreeDOS, or Microsoft
 MS-DOS code.
-
-
-Runtime script language: use `SCRIPT filename` to execute line-based instructions (`SET`, `ADD`, `PRINT`, `RUN`) from a FAT12 root file at runtime.
