@@ -44,6 +44,11 @@ static char line_buffer[128];
 static uint8_t file_buffer[8192];
 static uint8_t script_buffers[MAX_SCRIPT_DEPTH][8192];
 
+#define MAX_BINARY_FILE_SIZE 65536u
+#define EXEC_IMAGE_ALIGN 4u
+
+typedef void (*exec_entry_fn_t)(const executable_header_t *header, const uint8_t *image);
+
 static void execute_command(char *line);
 
 static inline void outb(uint16_t port, uint8_t value) {
@@ -812,7 +817,8 @@ static void cmd_help(char *topic) {
     } else if (str_icmp(topic, "STAT") == 0) {
         print("STAT filename - show file size in bytes\n");
     } else if (str_icmp(topic, "RUN") == 0) {
-        print("RUN filename - run a root-directory batch file, one command per line\n");
+        print("RUN filename - execute by type: .BAT/.CMD as batch, executable header as binary\n");
+        print("            batch files run one command per line from root directory\n");
     } else if (str_icmp(topic, "SCRIPT") == 0) {
         print("SCRIPT filename - run runtime script language (SET/ADD/PRINT/RUN)\n");
     } else if (str_icmp(topic, "COLOR") == 0) {
@@ -875,6 +881,79 @@ static void reboot(void) {
     for (;;) {
         __asm__ volatile("hlt");
     }
+}
+
+static bool has_ext(const char *name, const char *ext) {
+    const char *dot = 0;
+    while (*name) {
+        if (*name == '.') {
+            dot = name;
+        }
+        name++;
+    }
+    return dot && str_icmp(dot, ext) == 0;
+}
+
+static bool executable_header_valid(const executable_header_t *hdr, uint32_t len) {
+    uint32_t end;
+    if (hdr->magic != EXECUTABLE_MAGIC || hdr->version != EXECUTABLE_VERSION ||
+        hdr->header_size < sizeof(executable_header_t)) {
+        return false;
+    }
+    if ((hdr->entry_offset & (EXEC_IMAGE_ALIGN - 1u)) != 0u ||
+        (hdr->code_size & (EXEC_IMAGE_ALIGN - 1u)) != 0u) {
+        return false;
+    }
+    if (hdr->entry_offset < hdr->header_size) {
+        return false;
+    }
+    if (hdr->code_size > len || hdr->entry_offset > len) {
+        return false;
+    }
+    end = hdr->entry_offset + hdr->code_size;
+    if (end < hdr->entry_offset || end > len) {
+        return false;
+    }
+    return true;
+}
+
+static void run_binary_file(const char *name) {
+    uint32_t len = 0;
+    executable_header_t *hdr = (executable_header_t *)file_buffer;
+    uintptr_t entry_addr;
+    exec_entry_fn_t entry;
+
+    if (!fs_read_file(name, file_buffer, MAX_BINARY_FILE_SIZE, &len)) {
+        print("Binary file not found or too large\n");
+        return;
+    }
+    if (len < sizeof(executable_header_t) || !executable_header_valid(hdr, len)) {
+        print("Invalid executable header\n");
+        return;
+    }
+    if (hdr->checksum != 0u) {
+        uint32_t sum = 0;
+        for (uint32_t i = 0; i < len; i++) {
+            sum += file_buffer[i];
+        }
+        if (sum != hdr->checksum) {
+            print("Checksum mismatch\n");
+            return;
+        }
+    }
+
+    entry_addr = (uintptr_t)file_buffer + (uintptr_t)hdr->entry_offset;
+    if (entry_addr < (uintptr_t)file_buffer || entry_addr >= (uintptr_t)(file_buffer + len)) {
+        print("Entry out of range\n");
+        return;
+    }
+
+    /* ABI: entry(header, image_base)
+     * - header points to validated executable_header_t.
+     * - image_base points to the first byte of the loaded executable image.
+     */
+    entry = (exec_entry_fn_t)entry_addr;
+    entry(hdr, file_buffer);
 }
 
 static void run_script_file(const char *name) {
@@ -974,7 +1053,16 @@ static void execute_command(char *line) {
         cmd_stat(args);
     } else if (str_icmp(cmd, "RUN") == 0) {
         if (*args) {
-            run_script_file(args);
+            uint32_t len = 0;
+            if (has_ext(args, ".BAT") || has_ext(args, ".CMD")) {
+                run_script_file(args);
+            } else if (fs_read_file(args, file_buffer, sizeof(file_buffer), &len) &&
+                       len >= sizeof(executable_header_t) &&
+                       ((executable_header_t *)file_buffer)->magic == EXECUTABLE_MAGIC) {
+                run_binary_file(args);
+            } else {
+                run_script_file(args);
+            }
         } else {
             print("Usage: RUN filename\n");
         }
