@@ -404,6 +404,50 @@ static void read_line(char *buf, uint32_t cap) {
     }
 }
 
+
+static const char vfs_about_txt[] =
+    "64DOS virtual SYS filesystem\n"
+    "- read-only built-in files\n"
+    "- use paths like SYS:\\ABOUT.TXT\n";
+
+static const uint8_t vfs_demo_rxe[] = {
+    '6','4','E','X',
+    'E','C','H','O',' ','H','e','l','l','o',' ','f','r','o','m',' ','R','X','E','\n',
+    'D','I','R','\n'
+};
+
+typedef struct vfs_file {
+    const char *name;
+    const uint8_t *data;
+    uint32_t len;
+} vfs_file_t;
+
+static const vfs_file_t vfs_files[] = {
+    { "ABOUT.TXT", (const uint8_t *)vfs_about_txt, (uint32_t)(sizeof(vfs_about_txt) - 1u) },
+    { "DEMO.RXE", vfs_demo_rxe, (uint32_t)sizeof(vfs_demo_rxe) },
+};
+
+static const char *strip_sys_prefix(const char *name) {
+    if (upper(name[0]) == 'S' && upper(name[1]) == 'Y' && upper(name[2]) == 'S' &&
+        name[3] == ':' && (name[4] == '\\' || name[4] == '/')) {
+        return name + 5;
+    }
+    if (upper(name[0]) == 'S' && upper(name[1]) == 'Y' && upper(name[2]) == 'S' &&
+        (name[3] == '\\' || name[3] == '/')) {
+        return name + 4;
+    }
+    return NULL;
+}
+
+static const vfs_file_t *vfs_find_file(const char *name) {
+    const char *base = strip_sys_prefix(name);
+    if (!base) return NULL;
+    for (uint32_t i = 0; i < (uint32_t)(sizeof(vfs_files) / sizeof(vfs_files[0])); i++) {
+        if (str_icmp(base, vfs_files[i].name) == 0) return &vfs_files[i];
+    }
+    return NULL;
+}
+
 static bool fs_init(const uint8_t *image, uint32_t image_size) {
     if (image_size < 512 || image[510] != 0x55 || image[511] != 0xAA) {
         return false;
@@ -508,6 +552,13 @@ static const uint8_t *find_root_file(const char *name) {
 }
 
 static bool fs_read_file(const char *name, uint8_t *buf, uint32_t max_len, uint32_t *out_len) {
+    const vfs_file_t *vf = vfs_find_file(name);
+    if (vf) {
+        uint32_t n = vf->len < max_len ? vf->len : max_len;
+        for (uint32_t i = 0; i < n; i++) buf[i] = vf->data[i];
+        *out_len = n;
+        return n == vf->len;
+    }
     const uint8_t *e = find_root_file(name);
     if (!e) {
         return false;
@@ -590,9 +641,19 @@ static void cmd_dir(void) {
     print(" file(s)  ");
     print_dec(bytes);
     print(" bytes\n");
+    print("\n Directory of SYS:\\
+\n");
+    for (uint32_t i = 0; i < (uint32_t)(sizeof(vfs_files) / sizeof(vfs_files[0])); i++) {
+        print(vfs_files[i].name);
+        print("    ");
+        print_dec(vfs_files[i].len);
+        print(" bytes\n");
+    }
 }
 
 static uint32_t fs_file_size(const char *name) {
+    const vfs_file_t *vf = vfs_find_file(name);
+    if (vf) return vf->len;
     const uint8_t *e = find_root_file(name);
     if (!e) {
         return 0xFFFFFFFFu;
@@ -1055,6 +1116,37 @@ static void reboot(void) {
     }
 }
 
+static void run_rxe_file(const char *name) {
+    uint32_t len = 0;
+    char cmd[128];
+    uint32_t pos = 0;
+    uint8_t *payload;
+    if (!fs_read_file(name, file_buffer, sizeof(file_buffer) - 1u, &len)) {
+        print("Executable not found or too large\n");
+        return;
+    }
+    if (len < 4 || file_buffer[0] != '6' || file_buffer[1] != '4' || file_buffer[2] != 'E' || file_buffer[3] != 'X') {
+        print("Invalid RXE header\n");
+        return;
+    }
+    payload = file_buffer + 4;
+    len -= 4;
+    payload[len] = 0;
+    for (uint32_t i = 0; i <= len; i++) {
+        char c = (char)payload[i];
+        if (c == '\r') continue;
+        if (c == '\n' || c == 0) {
+            cmd[pos] = 0;
+            trim_right(cmd);
+            char *trimmed = skip_spaces(cmd);
+            if (*trimmed) execute_command(trimmed);
+            pos = 0;
+        } else if (pos + 1 < sizeof(cmd)) {
+            cmd[pos++] = c;
+        }
+    }
+}
+
 static void run_script_file(const char *name) {
     uint32_t len = 0;
     char cmd[128];
@@ -1152,7 +1244,12 @@ static void execute_command(char *line) {
         cmd_stat(args);
     } else if (str_icmp(cmd, "RUN") == 0) {
         if (*args) {
-            run_script_file(args);
+            uint32_t n = str_len(args);
+            if (n >= 4 && upper(args[n - 1]) == 'E' && upper(args[n - 2]) == 'X' && upper(args[n - 3]) == 'R' && args[n - 4] == '.') {
+                run_rxe_file(args);
+            } else {
+                run_script_file(args);
+            }
         } else {
             print("Usage: RUN filename\n");
         }
