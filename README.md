@@ -53,15 +53,28 @@ It is always exactly `1,474,560` bytes.
 
 ## Run
 
+Interactive (curses + serial mirrored to stdout):
+
 ```sh
 qemu-system-x86_64 -drive file=dist/64dos.img,format=raw,if=floppy -boot a -serial stdio -display curses
 ```
 
-For CI-style serial-only boot:
+CI-style serial-only boot:
 
 ```sh
 python3 scripts/qemu-smoke.py dist/64dos.img
 ```
+
+## Script Language
+
+Use `SCRIPT filename` to execute line-based instructions from a FAT12 root file at runtime.
+
+Supported script instructions:
+
+- `SET`
+- `ADD`
+- `PRINT`
+- `RUN`
 
 ## Layout
 
@@ -77,6 +90,3 @@ python3 scripts/qemu-smoke.py dist/64dos.img
 64DOS is released under the Unlicense. PDOS provenance is documented in
 `UPSTREAM.md`; this repository does not import GPL, FreeDOS, or Microsoft
 MS-DOS code.
-
-
-Runtime script language: use `SCRIPT filename` to execute line-based instructions (`SET`, `ADD`, `PRINT`, `RUN`) from a FAT12 root file at runtime.
