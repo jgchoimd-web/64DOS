@@ -141,6 +141,7 @@ static int hex_value(char c) {
 static bool parse_uint(char *s, uint32_t *out) {
     uint32_t base = 10;
     uint32_t value = 0;
+    const uint32_t max_u32 = 0xFFFFFFFFu;
     s = skip_spaces(s);
     if (!*s) {
         return false;
@@ -152,6 +153,9 @@ static bool parse_uint(char *s, uint32_t *out) {
     while (*s) {
         int digit = base == 16 ? hex_value(*s) : (*s >= '0' && *s <= '9' ? *s - '0' : -1);
         if (digit < 0 || (uint32_t)digit >= base) {
+            return false;
+        }
+        if (value > (max_u32 - (uint32_t)digit) / base) {
             return false;
         }
         value = value * base + (uint32_t)digit;
