@@ -1,4 +1,5 @@
 #include "bootinfo.h"
+#include "executable.h"
 #include "fs_fat12.h"
 #include "fs_iface.h"
 
@@ -592,29 +593,19 @@ static void cmd_vcs(char *args) {
     print("VCS: unknown operation\n");
 }
 
-static bool fs_init(const uint8_t *image, uint32_t image_size) {
-    if (image_size < 512 || image[510] != 0x55 || image[511] != 0xAA) {
+static bool fs_mount_image(const uint8_t *image, uint32_t image_size) {
+    const fs_driver_t *driver = fs_fat12_driver();
+    if (!driver || !driver->mount) {
         return false;
     }
-    fs.image = image;
-    fs.image_size = image_size;
-    fs.bytes_per_sector = rd16(image + 11);
-    fs.sectors_per_cluster = image[13];
-    fs.reserved_sectors = rd16(image + 14);
-    fs.fat_count = image[16];
-    fs.root_entries = rd16(image + 17);
-    fs.sectors_per_fat = rd16(image + 22);
-
-    if (fs.bytes_per_sector != 512 || fs.sectors_per_cluster == 0 ||
-        fs.fat_count == 0 || fs.root_entries == 0 || fs.sectors_per_fat == 0) {
+    if (!driver->mount(image, image_size, &g_fs) || !g_fs || !g_fs->read_file) {
         return false;
     }
-
-    fs.root_lba = fs.reserved_sectors + (uint32_t)fs.fat_count * fs.sectors_per_fat;
-    fs.root_sectors = ((uint32_t)fs.root_entries * 32u + fs.bytes_per_sector - 1u) /
-                      fs.bytes_per_sector;
-    fs.data_lba = fs.root_lba + fs.root_sectors;
-    return fs.data_lba * 512u < image_size;
+    g_fs_info.driver_name = driver->name;
+    if (g_fs->get_info) {
+        g_fs->get_info(&g_fs_info);
+    }
+    return true;
 }
 
 static bool fs_read_file(const char *name, uint8_t *buf, uint32_t max_len, uint32_t *out_len) {
@@ -630,20 +621,31 @@ static bool fs_read_file(const char *name, uint8_t *buf, uint32_t max_len, uint3
 
 
 static void cmd_dir(void) {
+    uint32_t cursor = 0;
+    fs_root_entry_t entry;
     print(" Directory of RFS:\\\n\n");
-    for (uint32_t i = 0; i < (uint32_t)(sizeof(rfs_files) / sizeof(rfs_files[0])); i++) {
-        print(rfs_files[i].name);
+    if (!g_fs || !g_fs->list_root) {
+        print("Filesystem not ready\n");
+        return;
+    }
+    while (g_fs->list_root(&cursor, &entry)) {
+        print(entry.name);
         print("    ");
-        print_dec(rfs_files[i].len);
+        print_dec(entry.size);
         print(" bytes\n");
     }
 }
 
 
 static uint32_t fs_file_size(const char *name) {
-    const rfs_file_t *vf = rfs_find_file(name);
-    if (vf) return vf->len;
-    return 0xFFFFFFFFu;
+    fs_stat_t st;
+    if (!g_fs || !g_fs->stat) {
+        return 0xFFFFFFFFu;
+    }
+    if (!g_fs->stat(name, &st)) {
+        return 0xFFFFFFFFu;
+    }
+    return st.size;
 }
 
 
@@ -1108,7 +1110,13 @@ static void cmd_mem(void) {
 
 static void cmd_info(void) {
     cmd_mem();
-    print("RFS-only mode\nRFS refs ");
+    print("FS driver: ");
+    print(g_fs_info.driver_name ? g_fs_info.driver_name : "unknown");
+    print("\nFAT12 root LBA ");
+    print_dec(g_fs_info.root_lba);
+    print(", data LBA ");
+    print_dec(g_fs_info.data_lba);
+    print("\nRFS refs ");
     print_dec((uint32_t)(sizeof(rfs_refs) / sizeof(rfs_refs[0])));
     print(", blobs ");
     print_dec((uint32_t)(sizeof(rfs_blobs) / sizeof(rfs_blobs[0])));
