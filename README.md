@@ -35,6 +35,8 @@ On Ubuntu:
 sudo apt-get update
 sudo apt-get install -y nasm gcc binutils qemu-system-x86 mtools make python3
 make check-tools
+# or only verify build dependencies:
+python3 scripts/check-tools.py --profile build
 make
 make test
 make smoke
