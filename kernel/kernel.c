@@ -649,6 +649,49 @@ static void cmd_dump(char *args) {
     }
 }
 
+
+static void cmd_wc(char *args) {
+    char *name = take_token(&args);
+    uint32_t file_size;
+    uint32_t len = 0;
+    uint32_t lines = 0;
+    uint32_t words = 0;
+    bool in_word = false;
+
+    if (!*name) {
+        print("Usage: WC filename\n");
+        return;
+    }
+
+    file_size = fs_file_size(name);
+    if (file_size == 0xFFFFFFFFu || !fs_read_file(name, file_buffer, sizeof(file_buffer), &len)) {
+        print("File not found or too large\n");
+        return;
+    }
+
+    for (uint32_t i = 0; i < len; i++) {
+        char c = (char)file_buffer[i];
+        if (c == '\n') {
+            lines++;
+        }
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+            in_word = false;
+        } else if (!in_word) {
+            words++;
+            in_word = true;
+        }
+    }
+
+    print(name);
+    print(": ");
+    print_dec(lines);
+    print(" line(s), ");
+    print_dec(words);
+    print(" word(s), ");
+    print_dec(file_size);
+    print(" byte(s)\n");
+}
+
 static uint8_t cmos_read(uint8_t reg) {
     outb(0x70, reg);
     return inb(0x71);
@@ -760,12 +803,14 @@ static void cmd_prompt(char *args) {
 static void cmd_help(char *topic) {
     topic = skip_spaces(topic);
     if (!*topic) {
-        print("Commands: VER HELP DIR/LS TYPE/CAT DUMP/HEX RUN CLS MEM/INFO\n");
+        print("Commands: VER HELP DIR/LS TYPE/CAT DUMP/HEX WC RUN CLS MEM/INFO\n");
         print("          DATE TIME COLOR PROMPT PWD ECHO EXIT REBOOT\n");
         return;
     }
     if (str_icmp(topic, "DUMP") == 0 || str_icmp(topic, "HEX") == 0) {
         print("DUMP filename [bytes] - show file bytes in hex and ASCII\n");
+    } else if (str_icmp(topic, "WC") == 0) {
+        print("WC filename - count lines, words, and bytes in a file\n");
     } else if (str_icmp(topic, "RUN") == 0) {
         print("RUN filename - run a root-directory batch file, one command per line\n");
     } else if (str_icmp(topic, "COLOR") == 0) {
@@ -911,6 +956,8 @@ static void execute_command(char *line) {
         }
     } else if (str_icmp(cmd, "DUMP") == 0 || str_icmp(cmd, "HEX") == 0) {
         cmd_dump(args);
+    } else if (str_icmp(cmd, "WC") == 0) {
+        cmd_wc(args);
     } else if (str_icmp(cmd, "RUN") == 0) {
         if (*args) {
             run_script_file(args);
