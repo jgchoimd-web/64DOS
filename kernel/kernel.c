@@ -1,6 +1,7 @@
 #include "bootinfo.h"
 #include "fs_fat12.h"
 #include "fs_iface.h"
+#include "executable.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -590,31 +591,6 @@ static void cmd_vcs(char *args) {
         return;
     }
     print("VCS: unknown operation\n");
-}
-
-static bool fs_init(const uint8_t *image, uint32_t image_size) {
-    if (image_size < 512 || image[510] != 0x55 || image[511] != 0xAA) {
-        return false;
-    }
-    fs.image = image;
-    fs.image_size = image_size;
-    fs.bytes_per_sector = rd16(image + 11);
-    fs.sectors_per_cluster = image[13];
-    fs.reserved_sectors = rd16(image + 14);
-    fs.fat_count = image[16];
-    fs.root_entries = rd16(image + 17);
-    fs.sectors_per_fat = rd16(image + 22);
-
-    if (fs.bytes_per_sector != 512 || fs.sectors_per_cluster == 0 ||
-        fs.fat_count == 0 || fs.root_entries == 0 || fs.sectors_per_fat == 0) {
-        return false;
-    }
-
-    fs.root_lba = fs.reserved_sectors + (uint32_t)fs.fat_count * fs.sectors_per_fat;
-    fs.root_sectors = ((uint32_t)fs.root_entries * 32u + fs.bytes_per_sector - 1u) /
-                      fs.bytes_per_sector;
-    fs.data_lba = fs.root_lba + fs.root_sectors;
-    return fs.data_lba * 512u < image_size;
 }
 
 static bool fs_read_file(const char *name, uint8_t *buf, uint32_t max_len, uint32_t *out_len) {
@@ -1279,6 +1255,16 @@ static void execute_command(char *line) {
     } else {
         print("Bad command or file name\n");
     }
+}
+
+
+static bool fs_mount_image(const uint8_t *image, uint32_t image_size) {
+    const fs_driver_t *driver = fs_fat12_driver();
+    if (!driver || !driver->probe(image, image_size) || !driver->mount(image, image_size, &g_fs) || !g_fs) {
+        return false;
+    }
+    g_fs->get_info(&g_fs_info);
+    return true;
 }
 
 static void run_autoexec(void) {
