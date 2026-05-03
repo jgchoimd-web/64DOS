@@ -9,7 +9,7 @@
 #define VGA_COLS 80u
 #define VGA_ROWS 25u
 #define DEFAULT_VGA_COLOR 0x07u
-#define DEFAULT_PROMPT "A:\\>"
+#define DEFAULT_PROMPT "RFS:\\>"
 #define MAX_SCRIPT_DEPTH 3u
 
 #define COM1 0x3F8u
@@ -63,11 +63,6 @@ static inline uint8_t inb(uint16_t port) {
 
 static uint16_t rd16(const uint8_t *p) {
     return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
-}
-
-static uint32_t rd32(const uint8_t *p) {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
-           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
 static uint32_t str_len(const char *s) {
@@ -400,46 +395,70 @@ static void read_line(char *buf, uint32_t cap) {
 }
 
 
-static const char vfs_about_txt[] =
-    "64DOS virtual SYS filesystem\n"
-    "- read-only built-in files\n"
-    "- use paths like SYS:\\ABOUT.TXT\n";
+static const char rfs_readme_txt[] =
+    "64DOS RFS (64-bit git-style)\n"
+    "- read-only object store\n"
+    "- use paths like RFS:\\README.TXT\n";
 
-static const uint8_t vfs_demo_rxe[] = {
+static const uint8_t rfs_demo_rxe[] = {
     '6','4','E','X',
     'E','C','H','O',' ','H','e','l','l','o',' ','f','r','o','m',' ','R','X','E','\n',
     'D','I','R','\n'
 };
 
-typedef struct vfs_file {
+typedef struct rfs_file {
     const char *name;
     const uint8_t *data;
     uint32_t len;
-} vfs_file_t;
+} rfs_file_t;
 
-static const vfs_file_t vfs_files[] = {
-    { "ABOUT.TXT", (const uint8_t *)vfs_about_txt, (uint32_t)(sizeof(vfs_about_txt) - 1u) },
-    { "DEMO.RXE", vfs_demo_rxe, (uint32_t)sizeof(vfs_demo_rxe) },
+static const rfs_file_t rfs_files[] = {
+    { "README.TXT", (const uint8_t *)rfs_readme_txt, (uint32_t)(sizeof(rfs_readme_txt) - 1u) },
+    { "DEMO.RXE", rfs_demo_rxe, (uint32_t)sizeof(rfs_demo_rxe) },
 };
 
-static const char *strip_sys_prefix(const char *name) {
-    if (upper(name[0]) == 'S' && upper(name[1]) == 'Y' && upper(name[2]) == 'S' &&
+
+typedef struct rfs_blob {
+    uint64_t oid;
+    const uint8_t *data;
+    uint32_t len;
+} rfs_blob_t;
+
+typedef struct rfs_ref {
+    const char *name;
+    uint64_t commit_oid;
+} rfs_ref_t;
+
+static const rfs_blob_t rfs_blobs[] = {
+    { 0x1000000000000001ull, (const uint8_t *)rfs_readme_txt, (uint32_t)(sizeof(rfs_readme_txt) - 1u) },
+    { 0x1000000000000002ull, rfs_demo_rxe, (uint32_t)sizeof(rfs_demo_rxe) },
+};
+
+static const rfs_ref_t rfs_refs[] = {
+    { "HEAD", 0x3000000000000001ull },
+    { "refs/heads/main", 0x3000000000000001ull },
+};
+
+static const char *strip_rfs_prefix(const char *name) {
+    if (upper(name[0]) == 'R' && upper(name[1]) == 'F' && upper(name[2]) == 'S' &&
         name[3] == ':' && (name[4] == '\\' || name[4] == '/')) {
         return name + 5;
     }
-    if (upper(name[0]) == 'S' && upper(name[1]) == 'Y' && upper(name[2]) == 'S' &&
+    if (upper(name[0]) == 'R' && upper(name[1]) == 'F' && upper(name[2]) == 'S' &&
         (name[3] == '\\' || name[3] == '/')) {
         return name + 4;
     }
     return NULL;
 }
 
-static const vfs_file_t *vfs_find_file(const char *name) {
-    const char *base = strip_sys_prefix(name);
+static const rfs_file_t *rfs_find_file(const char *name) {
+    const char *base = strip_rfs_prefix(name);
     if (!base) return NULL;
-    for (uint32_t i = 0; i < (uint32_t)(sizeof(vfs_files) / sizeof(vfs_files[0])); i++) {
-        if (str_icmp(base, vfs_files[i].name) == 0) return &vfs_files[i];
+    for (uint32_t i = 0; i < (uint32_t)(sizeof(rfs_files) / sizeof(rfs_files[0])); i++) {
+        if (str_icmp(base, rfs_files[i].name) == 0) return &rfs_files[i];
     }
+    if (str_icmp(base, "OBJECTS/1000000000000001.BLOB") == 0) return &rfs_files[0];
+    if (str_icmp(base, "OBJECTS/1000000000000002.BLOB") == 0) return &rfs_files[1];
     return NULL;
 }
 
@@ -468,172 +487,35 @@ static bool fs_init(const uint8_t *image, uint32_t image_size) {
     return fs.data_lba * 512u < image_size;
 }
 
-static bool make_83(const char *name, char out[11]) {
-    for (uint32_t i = 0; i < 11; i++) {
-        out[i] = ' ';
-    }
-
-    if (name[0] == 'A' && name[1] == ':' && (name[2] == '\\' || name[2] == '/')) {
-        name += 3;
-    }
-    while (*name == '\\' || *name == '/') {
-        name++;
-    }
-
-    uint32_t i = 0;
-    while (*name && *name != '.' && *name != ' ' && *name != '\t') {
-        if (i >= 8) {
-            return false;
-        }
-        out[i++] = upper(*name++);
-    }
-
-    if (*name == '.') {
-        name++;
-        i = 8;
-        while (*name && *name != ' ' && *name != '\t') {
-            if (i >= 11) {
-                return false;
-            }
-            out[i++] = upper(*name++);
-        }
-    }
-
-    return out[0] != ' ';
-}
-
-static const uint8_t *root_entry(uint32_t index) {
-    return fs.image + (fs.root_lba * 512u) + index * 32u;
-}
-
-static uint16_t fat_next(uint16_t cluster) {
-    const uint8_t *fat = fs.image + fs.reserved_sectors * 512u;
-    uint32_t offset = cluster + (cluster / 2u);
-    uint16_t value = (uint16_t)fat[offset] | ((uint16_t)fat[offset + 1] << 8);
-    if (cluster & 1u) {
-        value >>= 4;
-    } else {
-        value &= 0x0FFFu;
-    }
-    return value;
-}
-
-static const uint8_t *find_root_file(const char *name) {
-    char dos_name[11];
-    if (!make_83(name, dos_name)) {
-        return NULL;
-    }
-
-    for (uint32_t i = 0; i < fs.root_entries; i++) {
-        const uint8_t *e = root_entry(i);
-        if (e[0] == 0x00) {
-            return NULL;
-        }
-        if (e[0] == 0xE5 || (e[11] & 0x08) || (e[11] & 0x10)) {
-            continue;
-        }
-        bool same = true;
-        for (uint32_t j = 0; j < 11; j++) {
-            if ((char)e[j] != dos_name[j]) {
-                same = false;
-                break;
-            }
-        }
-        if (same) {
-            return e;
-        }
-    }
-    return NULL;
-}
-
 static bool fs_read_file(const char *name, uint8_t *buf, uint32_t max_len, uint32_t *out_len) {
-    const vfs_file_t *vf = vfs_find_file(name);
-    if (vf) {
-        uint32_t n = vf->len < max_len ? vf->len : max_len;
-        for (uint32_t i = 0; i < n; i++) buf[i] = vf->data[i];
-        *out_len = n;
-        return n == vf->len;
-    }
-    const uint8_t *e = find_root_file(name);
-    if (!e) {
+    const rfs_file_t *vf = rfs_find_file(name);
+    if (!vf) {
         return false;
     }
-
-    uint32_t size = rd32(e + 28);
-    uint32_t copied = 0;
-    uint16_t cluster = rd16(e + 26);
-
-    while (cluster >= 2 && cluster < 0xFF8 && copied < size && copied < max_len) {
-        uint32_t lba = fs.data_lba + ((uint32_t)cluster - 2u) * fs.sectors_per_cluster;
-        uint32_t offset = lba * 512u;
-        uint32_t chunk = (uint32_t)fs.sectors_per_cluster * 512u;
-        if (offset + chunk > fs.image_size) {
-            break;
-        }
-        if (chunk > size - copied) {
-            chunk = size - copied;
-        }
-        if (chunk > max_len - copied) {
-            chunk = max_len - copied;
-        }
-        for (uint32_t i = 0; i < chunk; i++) {
-            buf[copied + i] = fs.image[offset + i];
-        }
-        copied += chunk;
-        cluster = fat_next(cluster);
-    }
-
-    *out_len = copied;
-    return copied == size || copied == max_len;
+    uint32_t n = vf->len < max_len ? vf->len : max_len;
+    for (uint32_t i = 0; i < n; i++) buf[i] = vf->data[i];
+    *out_len = n;
+    return n == vf->len;
 }
 
-static void print_root_name(const uint8_t *e) {
-    for (uint32_t i = 0; i < 8 && e[i] != ' '; i++) {
-        console_putc((char)e[i]);
-    }
-    if (e[8] != ' ') {
-        console_putc('.');
-        for (uint32_t i = 8; i < 11 && e[i] != ' '; i++) {
-            console_putc((char)e[i]);
-        }
-    }
-    return false;
-}
 
 static void cmd_dir(void) {
-    fs_root_entry_t entry; uint32_t cursor = 0; uint32_t files = 0; uint32_t bytes = 0;
-    print(" Directory of A:\\
-\n");
-    while (g_fs->list_root(&cursor, &entry)) {
-        print(entry.name);
-        uint32_t name_len = str_len(entry.name);
-        while (name_len++ < 14) console_putc(' ');
-        print_dec(entry.size); print(" bytes\n"); files++; bytes += entry.size;
-    }
-    print("\n");
-    print_dec(files);
-    print(" file(s)  ");
-    print_dec(bytes);
-    print(" bytes\n");
-    print("\n Directory of SYS:\\
-\n");
-    for (uint32_t i = 0; i < (uint32_t)(sizeof(vfs_files) / sizeof(vfs_files[0])); i++) {
-        print(vfs_files[i].name);
+    print(" Directory of RFS:\\\n\n");
+    for (uint32_t i = 0; i < (uint32_t)(sizeof(rfs_files) / sizeof(rfs_files[0])); i++) {
+        print(rfs_files[i].name);
         print("    ");
-        print_dec(vfs_files[i].len);
+        print_dec(rfs_files[i].len);
         print(" bytes\n");
     }
 }
 
+
 static uint32_t fs_file_size(const char *name) {
-    const vfs_file_t *vf = vfs_find_file(name);
+    const rfs_file_t *vf = rfs_find_file(name);
     if (vf) return vf->len;
-    const uint8_t *e = find_root_file(name);
-    if (!e) {
-        return 0xFFFFFFFFu;
-    }
-    return rd32(e + 28);
+    return 0xFFFFFFFFu;
 }
+
 
 static void cmd_type(const char *name) {
     uint32_t len = 0;
@@ -832,6 +714,10 @@ static void cmd_time(void) {
     print_2(rtc.minute);
     console_putc(':');
     print_2(rtc.second);
+    print("\nRFS refs ");
+    print_dec((uint32_t)(sizeof(rfs_refs) / sizeof(rfs_refs[0])));
+    print(", blobs ");
+    print_dec((uint32_t)(sizeof(rfs_blobs) / sizeof(rfs_blobs[0])));
     print("\n");
 }
 
@@ -855,6 +741,10 @@ static void cmd_color(char *args) {
     vga_clear();
     print("Color set to ");
     print_hex8(vga_color);
+    print("\nRFS refs ");
+    print_dec((uint32_t)(sizeof(rfs_refs) / sizeof(rfs_refs[0])));
+    print(", blobs ");
+    print_dec((uint32_t)(sizeof(rfs_blobs) / sizeof(rfs_blobs[0])));
     print("\n");
 }
 
@@ -867,6 +757,10 @@ static void cmd_prompt(char *args) {
     }
     print("Prompt is ");
     print(prompt_text);
+    print("\nRFS refs ");
+    print_dec((uint32_t)(sizeof(rfs_refs) / sizeof(rfs_refs[0])));
+    print(", blobs ");
+    print_dec((uint32_t)(sizeof(rfs_blobs) / sizeof(rfs_blobs[0])));
     print("\n");
 }
 
@@ -1061,21 +955,19 @@ static void cmd_mem(void) {
     print_dec(g_boot->kernel_size);
     print(" bytes\nBoot drive ");
     print_hex32(g_boot->boot_drive);
+    print("\nRFS refs ");
+    print_dec((uint32_t)(sizeof(rfs_refs) / sizeof(rfs_refs[0])));
+    print(", blobs ");
+    print_dec((uint32_t)(sizeof(rfs_blobs) / sizeof(rfs_blobs[0])));
     print("\n");
 }
 
 static void cmd_info(void) {
     cmd_mem();
-    print("FS driver ");
-    print(g_fs_info.driver_name);
-    print(", bytes/sector ");
-    print_dec(g_fs_info.bytes_per_sector);
-    print("\nFS root LBA ");
-    print_dec(g_fs_info.root_lba);
-    print(", data LBA ");
-    print_dec(g_fs_info.data_lba);
-    print(", root entries ");
-    print_dec(g_fs_info.root_entries);
+    print("RFS-only mode\nRFS refs ");
+    print_dec((uint32_t)(sizeof(rfs_refs) / sizeof(rfs_refs[0])));
+    print(", blobs ");
+    print_dec((uint32_t)(sizeof(rfs_blobs) / sizeof(rfs_blobs[0])));
     print("\n");
 }
 
@@ -1185,7 +1077,7 @@ static void execute_command(char *line) {
     } else if (str_icmp(cmd, "DIR") == 0 || str_icmp(cmd, "LS") == 0) {
         cmd_dir();
     } else if (str_icmp(cmd, "PWD") == 0 || str_icmp(cmd, "CD") == 0) {
-        print("A:\\\n");
+        print("RFS:\\\n");
     } else if (str_icmp(cmd, "CLS") == 0) {
         vga_clear();
     } else if (str_icmp(cmd, "MEM") == 0) {
