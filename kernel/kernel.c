@@ -818,11 +818,27 @@ static void cmd_prompt(char *args) {
     print("\n");
 }
 
+static void cmd_pause(void) {
+    print("Press Enter to continue . . .");
+    for (;;) {
+        char c = read_char();
+        if (c == '\n') {
+            console_putc('\n');
+            return;
+        }
+    }
+}
+
+static void cmd_beep(void) {
+    console_putc('\a');
+    print("Beep\n");
+}
+
 static void cmd_help(char *topic) {
     topic = skip_spaces(topic);
     if (!*topic) {
-        print("Commands: VER HELP DIR/LS TYPE/CAT DUMP/HEX WC STAT RUN CLS MEM/INFO\n");
-        print("          DATE TIME COLOR PROMPT PWD ECHO EXIT REBOOT\n");
+        print("Commands: VER HELP DIR/LS TYPE/CAT DUMP/HEX WC RUN CLS MEM/INFO\n");
+        print("          DATE TIME COLOR PROMPT PWD ECHO PAUSE BEEP EXIT REBOOT\n");
         return;
     }
     if (str_icmp(topic, "DUMP") == 0 || str_icmp(topic, "HEX") == 0) {
@@ -837,6 +853,10 @@ static void cmd_help(char *topic) {
         print("COLOR bgfg - set VGA text color with DOS hex digits, e.g. COLOR 1E\n");
     } else if (str_icmp(topic, "PROMPT") == 0) {
         print("PROMPT [text] - set the command prompt, or reset it without text\n");
+    } else if (str_icmp(topic, "PAUSE") == 0) {
+        print("PAUSE - wait for Enter before continuing\n");
+    } else if (str_icmp(topic, "BEEP") == 0) {
+        print("BEEP - emit an ASCII bell on the active console\n");
     } else {
         print("No detailed help for that command\n");
     }
@@ -963,6 +983,10 @@ static void execute_command(char *line) {
         cmd_color(args);
     } else if (str_icmp(cmd, "PROMPT") == 0) {
         cmd_prompt(args);
+    } else if (str_icmp(cmd, "PAUSE") == 0) {
+        cmd_pause();
+    } else if (str_icmp(cmd, "BEEP") == 0) {
+        cmd_beep();
     } else if (str_icmp(cmd, "EXIT") == 0 || str_icmp(cmd, "REBOOT") == 0) {
         reboot();
     } else if (str_icmp(cmd, "ECHO") == 0) {
