@@ -29,12 +29,15 @@ Required tools:
 - QEMU for smoke tests
 - mtools for compatibility checks
 
+`make check-tools` validates build prerequisites only. Use `make check-tools-all` to also validate smoke-test and compatibility tooling.
+
 On Ubuntu:
 
 ```sh
 sudo apt-get update
 sudo apt-get install -y nasm gcc binutils qemu-system-x86 mtools make python3
-make check-tools
+make check-tools          # build prerequisites
+make check-tools-all      # build + smoke/compat prerequisites
 make
 make test
 make smoke
