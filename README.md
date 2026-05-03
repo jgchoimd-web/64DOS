@@ -12,9 +12,10 @@ The first release is intentionally small:
 - VGA text console with serial output mirrored to COM1.
 - Serial input for automation and PS/2 keyboard input for manual use.
 - Read-only FAT12 `A:\` filesystem from the RAM-loaded floppy image.
+- Built-in virtual `RFS:\` repository view for demo content and metadata inspection.
 - Built-in commands: `VER`, `HELP`, `DIR`/`LS`, `TYPE`/`CAT`, `DUMP`/`HEX`,
   `WC`, `RUN`, `SCRIPT`, `DATE`, `TIME`, `COLOR`, `PROMPT`, `PWD`, `CLS`, `MEM`/`INFO`,
-  `ECHO`, `PAUSE`, `BEEP`, `REBOOT`.
+  `ECHO`, `PAUSE`, `BEEP`, `REBOOT`, `RFSREFS`, `PKG`, `VCS`.
 
 Legacy 16-bit DOS `.COM` and `.EXE` compatibility is out of scope for v1.
 
@@ -53,15 +54,32 @@ It is always exactly `1,474,560` bytes.
 
 ## Run
 
+Interactive (curses + serial mirrored to stdout):
+
 ```sh
 qemu-system-x86_64 -drive file=dist/64dos.img,format=raw,if=floppy -boot a -serial stdio -display curses
 ```
 
-For CI-style serial-only boot:
+CI-style serial-only boot:
 
 ```sh
 python3 scripts/qemu-smoke.py dist/64dos.img
 ```
+
+## RFS Notes
+
+64DOS boots with a DOS-style `RFS:\>` prompt. In this build, `RFS:` is an in-memory, read-only virtual repository namespace (separate from FAT12 `A:`). You can inspect it with `DIR`, `TYPE`, and `RFSREFS`.
+
+## Script Language
+
+Use `SCRIPT filename` to execute line-based instructions from a FAT12 root file at runtime.
+
+Supported script instructions:
+
+- `SET`
+- `ADD`
+- `PRINT`
+- `RUN`
 
 ## Layout
 
@@ -77,6 +95,3 @@ python3 scripts/qemu-smoke.py dist/64dos.img
 64DOS is released under the Unlicense. PDOS provenance is documented in
 `UPSTREAM.md`; this repository does not import GPL, FreeDOS, or Microsoft
 MS-DOS code.
-
-
-Runtime script language: use `SCRIPT filename` to execute line-based instructions (`SET`, `ADD`, `PRINT`, `RUN`) from a FAT12 root file at runtime.
