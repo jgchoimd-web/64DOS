@@ -1,9 +1,8 @@
 # 64DOS
 
 64DOS is a tiny public-domain DOS-style operating system for BIOS-booted
-x86-64 PCs. It boots from a 1.44 MB FAT12 floppy image, switches from BIOS
-real mode into long mode, and runs a native 64-bit kernel with a small
-COMMAND-style shell.
+x86-64 PCs. It boots from BIOS real mode into long mode and runs a native
+64-bit kernel with a small COMMAND-style shell centered around RFS.
 
 The first release is intentionally small:
 
@@ -11,8 +10,8 @@ The first release is intentionally small:
 - Native x86-64 long-mode kernel.
 - VGA text console with serial output mirrored to COM1.
 - Serial input for automation and PS/2 keyboard input for manual use.
-- Read-only FAT12 `A:\` filesystem from the RAM-loaded floppy image (disk-backed content).
-- Additional read-only virtual `RFS:\` repository namespace for built-in demo content and metadata inspection.
+- Native 64-bit RFS filesystem as the primary runtime filesystem.
+- VCS-oriented RFS data model with repository-style inspection commands.
 - Built-in commands: `VER`, `HELP`, `DIR`/`LS`, `TYPE`/`CAT`, `DUMP`/`HEX`,
   `WC`, `RUN`, `SCRIPT`, `DATE`, `TIME`, `COLOR`, `PROMPT`, `PWD`, `CLS`, `MEM`/`INFO`,
   `ECHO`, `PAUSE`, `BEEP`, `REBOOT`, `RFSREFS`, `PKG`, `VCS`.
@@ -68,11 +67,11 @@ python3 scripts/qemu-smoke.py dist/64dos.img
 
 ## RFS Notes
 
-64DOS boots with a DOS-style `RFS:\>` prompt. In this build, `RFS:` is an in-memory, read-only virtual repository namespace (separate from FAT12 `A:`). You can inspect it with `DIR`, `TYPE`, and `RFSREFS`.
+64DOS boots with a DOS-style `RFS:\>` prompt. RFS is the system's real 64-bit runtime filesystem (not a virtualized overlay and not read-only). Repository metadata can be explored with `RFSREFS`, `PKG`, and `VCS`, and regular file content can be accessed with `DIR` and `TYPE`.
 
 ## Script Language
 
-Use `SCRIPT filename` to execute line-based instructions from a FAT12 root file at runtime.
+Use `SCRIPT filename` to execute line-based instructions from an RFS path at runtime.
 
 Supported script instructions:
 
