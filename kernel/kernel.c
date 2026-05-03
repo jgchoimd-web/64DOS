@@ -1,4 +1,6 @@
 #include "bootinfo.h"
+#include "fs_fat12.h"
+#include "fs_iface.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -35,24 +37,17 @@ typedef struct script_var {
 static script_var_t runtime_vars[16];
 static uint32_t runtime_var_count;
 
-typedef struct fat12 {
-    const uint8_t *image;
-    uint32_t image_size;
-    uint16_t bytes_per_sector;
-    uint8_t sectors_per_cluster;
-    uint16_t reserved_sectors;
-    uint8_t fat_count;
-    uint16_t root_entries;
-    uint16_t sectors_per_fat;
-    uint32_t root_lba;
-    uint32_t root_sectors;
-    uint32_t data_lba;
-} fat12_t;
+static const fs_ops_t *g_fs;
+static fs_info_t g_fs_info;
 
-static fat12_t fs;
 static char line_buffer[128];
 static uint8_t file_buffer[8192];
 static uint8_t script_buffers[MAX_SCRIPT_DEPTH][8192];
+
+#define MAX_BINARY_FILE_SIZE 65536u
+#define EXEC_IMAGE_ALIGN 4u
+
+typedef void (*exec_entry_fn_t)(const executable_header_t *header, const uint8_t *image);
 
 static void execute_command(char *line);
 
@@ -602,39 +597,18 @@ static void print_root_name(const uint8_t *e) {
             console_putc((char)e[i]);
         }
     }
+    return false;
 }
 
 static void cmd_dir(void) {
-    uint32_t files = 0;
-    uint32_t bytes = 0;
-    print(" Directory of A:\\\n\n");
-    for (uint32_t i = 0; i < fs.root_entries; i++) {
-        const uint8_t *e = root_entry(i);
-        if (e[0] == 0x00) {
-            break;
-        }
-        if (e[0] == 0xE5 || (e[11] & 0x08) || (e[11] & 0x10)) {
-            continue;
-        }
-        print_root_name(e);
-        uint32_t name_len = 0;
-        for (uint32_t j = 0; j < 8 && e[j] != ' '; j++) {
-            name_len++;
-        }
-        if (e[8] != ' ') {
-            name_len++;
-            for (uint32_t j = 8; j < 11 && e[j] != ' '; j++) {
-                name_len++;
-            }
-        }
-        while (name_len++ < 14) {
-            console_putc(' ');
-        }
-        uint32_t size = rd32(e + 28);
-        print_dec(size);
-        print(" bytes\n");
-        files++;
-        bytes += size;
+    fs_root_entry_t entry; uint32_t cursor = 0; uint32_t files = 0; uint32_t bytes = 0;
+    print(" Directory of A:\\
+\n");
+    while (g_fs->list_root(&cursor, &entry)) {
+        print(entry.name);
+        uint32_t name_len = str_len(entry.name);
+        while (name_len++ < 14) console_putc(' ');
+        print_dec(entry.size); print(" bytes\n"); files++; bytes += entry.size;
     }
     print("\n");
     print_dec(files);
@@ -663,7 +637,7 @@ static uint32_t fs_file_size(const char *name) {
 
 static void cmd_type(const char *name) {
     uint32_t len = 0;
-    if (!fs_read_file(name, file_buffer, sizeof(file_buffer) - 1u, &len)) {
+    if (!g_fs->read_file(name, file_buffer, sizeof(file_buffer) - 1u, &len)) {
         print("File not found or too large\n");
         return;
     }
@@ -694,7 +668,7 @@ static void cmd_dump(char *args) {
     }
 
     file_size = fs_file_size(name);
-    if (file_size == 0xFFFFFFFFu || !fs_read_file(name, file_buffer, count, &len)) {
+    if (file_size == 0xFFFFFFFFu || !g_fs->read_file(name, file_buffer, count, &len)) {
         print("File not found\n");
         return;
     }
@@ -742,7 +716,7 @@ static void cmd_wc(char *args) {
     }
 
     file_size = fs_file_size(name);
-    if (file_size == 0xFFFFFFFFu || !fs_read_file(name, file_buffer, sizeof(file_buffer), &len)) {
+    if (file_size == 0xFFFFFFFFu || !g_fs->read_file(name, file_buffer, sizeof(file_buffer), &len)) {
         print("File not found or too large\n");
         return;
     }
@@ -975,7 +949,7 @@ static void cmd_script(char *args) {
         print("Usage: SCRIPT filename\n");
         return;
     }
-    if (!fs_read_file(args, script, sizeof(file_buffer) - 1u, &len)) {
+    if (!g_fs->read_file(args, script, sizeof(file_buffer) - 1u, &len)) {
         print("Script file not found or too large\n");
         return;
     }
@@ -1055,7 +1029,8 @@ static void cmd_help(char *topic) {
     } else if (str_icmp(topic, "STAT") == 0) {
         print("STAT filename - show file size in bytes\n");
     } else if (str_icmp(topic, "RUN") == 0) {
-        print("RUN filename - run a root-directory batch file, one command per line\n");
+        print("RUN filename - execute by type: .BAT/.CMD as batch, executable header as binary\n");
+        print("            batch files run one command per line from root directory\n");
     } else if (str_icmp(topic, "SCRIPT") == 0) {
         print("SCRIPT filename - run runtime script language (SET/ADD/PRINT/RUN)\n");
     } else if (str_icmp(topic, "COLOR") == 0) {
@@ -1091,12 +1066,16 @@ static void cmd_mem(void) {
 
 static void cmd_info(void) {
     cmd_mem();
-    print("FAT12 root LBA ");
-    print_dec(fs.root_lba);
+    print("FS driver ");
+    print(g_fs_info.driver_name);
+    print(", bytes/sector ");
+    print_dec(g_fs_info.bytes_per_sector);
+    print("\nFS root LBA ");
+    print_dec(g_fs_info.root_lba);
     print(", data LBA ");
-    print_dec(fs.data_lba);
+    print_dec(g_fs_info.data_lba);
     print(", root entries ");
-    print_dec(fs.root_entries);
+    print_dec(g_fs_info.root_entries);
     print("\n");
 }
 
@@ -1158,7 +1137,7 @@ static void run_script_file(const char *name) {
         return;
     }
     script = script_buffers[script_depth];
-    if (!fs_read_file(name, script, sizeof(script_buffers[0]) - 1u, &len)) {
+    if (!g_fs->read_file(name, script, sizeof(script_buffers[0]) - 1u, &len)) {
         print("Batch file not found or too large\n");
         return;
     }
@@ -1281,8 +1260,8 @@ void kmain(const boot_info_t *boot) {
 
     g_image = (const uint8_t *)(uintptr_t)boot->image_base;
     g_image_size = boot->image_size;
-    if (!fs_init(g_image, g_image_size)) {
-        print("FAT12 image mount failed\n");
+    if (!fs_mount_image(g_image, g_image_size)) {
+        print("Image mount failed: no supported filesystem\n");
         for (;;) {
             __asm__ volatile("hlt");
         }
