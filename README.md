@@ -11,8 +11,8 @@ The first release is intentionally small:
 - Native x86-64 long-mode kernel.
 - VGA text console with serial output mirrored to COM1.
 - Serial input for automation and PS/2 keyboard input for manual use.
-- Read-only FAT12 `A:\` filesystem from the RAM-loaded floppy image.
-- Built-in virtual `RFS:\` repository view for demo content and metadata inspection.
+- Read-only FAT12 `A:\` filesystem from the RAM-loaded floppy image (disk-backed content).
+- Additional read-only virtual `RFS:\` repository namespace for built-in demo content and metadata inspection.
 - Built-in commands: `VER`, `HELP`, `DIR`/`LS`, `TYPE`/`CAT`, `DUMP`/`HEX`,
   `WC`, `RUN`, `SCRIPT`, `DATE`, `TIME`, `COLOR`, `PROMPT`, `PWD`, `CLS`, `MEM`/`INFO`,
   `ECHO`, `PAUSE`, `BEEP`, `REBOOT`, `RFSREFS`, `PKG`, `VCS`.
