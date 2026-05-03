@@ -70,11 +70,6 @@ static uint16_t rd16(const uint8_t *p) {
     return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
 }
 
-static uint32_t rd32(const uint8_t *p) {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
-           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-
 static uint32_t str_len(const char *s) {
     uint32_t n = 0;
     while (s[n]) {
@@ -497,84 +492,6 @@ static bool fs_init(const uint8_t *image, uint32_t image_size) {
     return fs.data_lba * 512u < image_size;
 }
 
-static bool make_83(const char *name, char out[11]) {
-    for (uint32_t i = 0; i < 11; i++) {
-        out[i] = ' ';
-    }
-
-    if (name[0] == 'A' && name[1] == ':' && (name[2] == '\\' || name[2] == '/')) {
-        name += 3;
-    }
-    while (*name == '\\' || *name == '/') {
-        name++;
-    }
-
-    uint32_t i = 0;
-    while (*name && *name != '.' && *name != ' ' && *name != '\t') {
-        if (i >= 8) {
-            return false;
-        }
-        out[i++] = upper(*name++);
-    }
-
-    if (*name == '.') {
-        name++;
-        i = 8;
-        while (*name && *name != ' ' && *name != '\t') {
-            if (i >= 11) {
-                return false;
-            }
-            out[i++] = upper(*name++);
-        }
-    }
-
-    return out[0] != ' ';
-}
-
-static const uint8_t *root_entry(uint32_t index) {
-    return fs.image + (fs.root_lba * 512u) + index * 32u;
-}
-
-static uint16_t fat_next(uint16_t cluster) {
-    const uint8_t *fat = fs.image + fs.reserved_sectors * 512u;
-    uint32_t offset = cluster + (cluster / 2u);
-    uint16_t value = (uint16_t)fat[offset] | ((uint16_t)fat[offset + 1] << 8);
-    if (cluster & 1u) {
-        value >>= 4;
-    } else {
-        value &= 0x0FFFu;
-    }
-    return value;
-}
-
-static const uint8_t *find_root_file(const char *name) {
-    char dos_name[11];
-    if (!make_83(name, dos_name)) {
-        return NULL;
-    }
-
-    for (uint32_t i = 0; i < fs.root_entries; i++) {
-        const uint8_t *e = root_entry(i);
-        if (e[0] == 0x00) {
-            return NULL;
-        }
-        if (e[0] == 0xE5 || (e[11] & 0x08) || (e[11] & 0x10)) {
-            continue;
-        }
-        bool same = true;
-        for (uint32_t j = 0; j < 11; j++) {
-            if ((char)e[j] != dos_name[j]) {
-                same = false;
-                break;
-            }
-        }
-        if (same) {
-            return e;
-        }
-    }
-    return NULL;
-}
-
 static bool fs_read_file(const char *name, uint8_t *buf, uint32_t max_len, uint32_t *out_len) {
     const rfs_file_t *vf = rfs_find_file(name);
     if (!vf) {
@@ -586,18 +503,6 @@ static bool fs_read_file(const char *name, uint8_t *buf, uint32_t max_len, uint3
     return n == vf->len;
 }
 
-
-static void print_root_name(const uint8_t *e) {
-    for (uint32_t i = 0; i < 8 && e[i] != ' '; i++) {
-        console_putc((char)e[i]);
-    }
-    if (e[8] != ' ') {
-        console_putc('.');
-        for (uint32_t i = 8; i < 11 && e[i] != ' '; i++) {
-            console_putc((char)e[i]);
-        }
-    }
-}
 
 static void cmd_dir(void) {
     print(" Directory of RFS:\\\n\n");
@@ -1063,13 +968,7 @@ static void cmd_mem(void) {
 
 static void cmd_info(void) {
     cmd_mem();
-    print("FAT12 root LBA ");
-    print_dec(fs.root_lba);
-    print(", data LBA ");
-    print_dec(fs.data_lba);
-    print(", root entries ");
-    print_dec(fs.root_entries);
-    print("\nRFS refs ");
+    print("RFS-only mode\nRFS refs ");
     print_dec((uint32_t)(sizeof(rfs_refs) / sizeof(rfs_refs[0])));
     print(", blobs ");
     print_dec((uint32_t)(sizeof(rfs_blobs) / sizeof(rfs_blobs[0])));
