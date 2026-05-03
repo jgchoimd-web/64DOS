@@ -125,20 +125,22 @@ def build_image(stage1_path, stage2_path, kernel_path, root_dir, output_path):
     kernel_size = len(files[0][1])
 
     for index, (name, data) in enumerate(files):
-        clusters = max(1, math.ceil(len(data) / (BYTES_PER_SECTOR * SECTORS_PER_CLUSTER)))
-        first_cluster = next_cluster
-        last_cluster = first_cluster + clusters - 1
-        if DATA_LBA + (last_cluster - 2) >= TOTAL_SECTORS:
-            raise ValueError("files do not fit in 1.44 MB image")
+        clusters = math.ceil(len(data) / (BYTES_PER_SECTOR * SECTORS_PER_CLUSTER))
+        first_cluster = 0
+        if clusters:
+            first_cluster = next_cluster
+            last_cluster = first_cluster + clusters - 1
+            if DATA_LBA + (last_cluster - 2) >= TOTAL_SECTORS:
+                raise ValueError("files do not fit in 1.44 MB image")
 
-        for cluster in range(first_cluster, last_cluster + 1):
-            if cluster == last_cluster:
-                set_fat12_entry(fat, cluster, 0xFFF)
-            else:
-                set_fat12_entry(fat, cluster, cluster + 1)
+            for cluster in range(first_cluster, last_cluster + 1):
+                if cluster == last_cluster:
+                    set_fat12_entry(fat, cluster, 0xFFF)
+                else:
+                    set_fat12_entry(fat, cluster, cluster + 1)
 
-        data_offset = (DATA_LBA + (first_cluster - 2)) * BYTES_PER_SECTOR
-        image[data_offset : data_offset + len(data)] = data
+            data_offset = (DATA_LBA + (first_cluster - 2)) * BYTES_PER_SECTOR
+            image[data_offset : data_offset + len(data)] = data
         write_root_entry(root, index, name, first_cluster, len(data))
 
         if index == 0:
@@ -191,4 +193,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

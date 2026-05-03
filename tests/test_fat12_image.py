@@ -100,7 +100,29 @@ class Fat12ImageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             mkfloppy.dos_name("too-long-name.txt")
 
+    def test_zero_length_file_uses_cluster_zero(self):
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td)
+            root = work / "root"
+            root.mkdir()
+            (root / "EMPTY.TXT").write_bytes(b"")
+
+            stage1 = work / "stage1.bin"
+            stage2 = work / "stage2.bin"
+            kernel = work / "kernel64.bin"
+            image = work / "64dos.img"
+            make_stage1(stage1)
+            stage2.write_bytes(b"S2")
+            kernel.write_bytes(b"abc")
+
+            mkfloppy.build_image(stage1, stage2, kernel, root, image)
+            data = image.read_bytes()
+            root_off = mkfloppy.ROOT_LBA * 512
+
+            empty = data[root_off + 32 : root_off + 64]
+            self.assertEqual(rd32(empty, 28), 0)
+            self.assertEqual(rd16(empty, 26), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
-
