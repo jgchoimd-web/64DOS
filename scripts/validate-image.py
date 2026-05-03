@@ -111,6 +111,8 @@ def main():
         errors.append("DEMO.BAT missing from root")
     if "README.TXT" not in files:
         errors.append("README.TXT missing from root")
+    if "SAMPLE.EXE" not in files:
+        errors.append("SAMPLE.EXE missing from root")
 
     if errors:
         for error in errors:
