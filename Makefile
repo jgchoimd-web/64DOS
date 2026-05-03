@@ -35,11 +35,14 @@ $(BUILD)/stage2.bin: boot/stage2.asm | $(BUILD)
 $(BUILD)/entry.o: kernel/entry.asm | $(BUILD)
 	$(NASM) -f elf64 $< -o $@
 
-$(BUILD)/kernel.o: kernel/kernel.c kernel/include/bootinfo.h | $(BUILD)
+$(BUILD)/kernel.o: kernel/kernel.c kernel/include/bootinfo.h kernel/include/fs_iface.h kernel/include/fs_fat12.h | $(BUILD)
 	$(CC) $(CFLAGS) -c kernel/kernel.c -o $@
 
-$(BUILD)/kernel64.elf: $(BUILD)/entry.o $(BUILD)/kernel.o kernel/linker.ld
-	$(LD) $(LDFLAGS) -o $@ $(BUILD)/entry.o $(BUILD)/kernel.o
+$(BUILD)/fs_fat12.o: kernel/fs_fat12.c kernel/include/fs_fat12.h kernel/include/fs_iface.h | $(BUILD)
+	$(CC) $(CFLAGS) -c kernel/fs_fat12.c -o $@
+
+$(BUILD)/kernel64.elf: $(BUILD)/entry.o $(BUILD)/kernel.o $(BUILD)/fs_fat12.o kernel/linker.ld
+	$(LD) $(LDFLAGS) -o $@ $(BUILD)/entry.o $(BUILD)/kernel.o $(BUILD)/fs_fat12.o
 
 $(BUILD)/kernel64.bin: $(BUILD)/kernel64.elf
 	$(OBJCOPY) -O binary $< $@

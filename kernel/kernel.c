@@ -1,5 +1,6 @@
 #include "bootinfo.h"
-#include "executable.h"
+#include "fs_fat12.h"
+#include "fs_iface.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -36,21 +37,9 @@ typedef struct script_var {
 static script_var_t runtime_vars[16];
 static uint32_t runtime_var_count;
 
-typedef struct fat12 {
-    const uint8_t *image;
-    uint32_t image_size;
-    uint16_t bytes_per_sector;
-    uint8_t sectors_per_cluster;
-    uint16_t reserved_sectors;
-    uint8_t fat_count;
-    uint16_t root_entries;
-    uint16_t sectors_per_fat;
-    uint32_t root_lba;
-    uint32_t root_sectors;
-    uint32_t data_lba;
-} fat12_t;
+static const fs_ops_t *g_fs;
+static fs_info_t g_fs_info;
 
-static fat12_t fs;
 static char line_buffer[128];
 static uint8_t file_buffer[8192];
 static uint8_t script_buffers[MAX_SCRIPT_DEPTH][8192];
@@ -410,205 +399,33 @@ static void read_line(char *buf, uint32_t cap) {
     }
 }
 
-static bool fs_init(const uint8_t *image, uint32_t image_size) {
-    if (image_size < 512 || image[510] != 0x55 || image[511] != 0xAA) {
-        return false;
+static bool fs_mount_image(const uint8_t *image, uint32_t image_size) {
+    const fs_driver_t *drivers[] = { fs_fat12_driver() };
+    for (uint32_t i = 0; i < sizeof(drivers) / sizeof(drivers[0]); i++) {
+        if (!drivers[i]->probe(image, image_size)) continue;
+        if (drivers[i]->mount(image, image_size, &g_fs)) { g_fs->get_info(&g_fs_info); return true; }
     }
-    fs.image = image;
-    fs.image_size = image_size;
-    fs.bytes_per_sector = rd16(image + 11);
-    fs.sectors_per_cluster = image[13];
-    fs.reserved_sectors = rd16(image + 14);
-    fs.fat_count = image[16];
-    fs.root_entries = rd16(image + 17);
-    fs.sectors_per_fat = rd16(image + 22);
-
-    if (fs.bytes_per_sector != 512 || fs.sectors_per_cluster == 0 ||
-        fs.fat_count == 0 || fs.root_entries == 0 || fs.sectors_per_fat == 0) {
-        return false;
-    }
-
-    fs.root_lba = fs.reserved_sectors + (uint32_t)fs.fat_count * fs.sectors_per_fat;
-    fs.root_sectors = ((uint32_t)fs.root_entries * 32u + fs.bytes_per_sector - 1u) /
-                      fs.bytes_per_sector;
-    fs.data_lba = fs.root_lba + fs.root_sectors;
-    return fs.data_lba * 512u < image_size;
-}
-
-static bool make_83(const char *name, char out[11]) {
-    for (uint32_t i = 0; i < 11; i++) {
-        out[i] = ' ';
-    }
-
-    if (name[0] == 'A' && name[1] == ':' && (name[2] == '\\' || name[2] == '/')) {
-        name += 3;
-    }
-    while (*name == '\\' || *name == '/') {
-        name++;
-    }
-
-    uint32_t i = 0;
-    while (*name && *name != '.' && *name != ' ' && *name != '\t') {
-        if (i >= 8) {
-            return false;
-        }
-        out[i++] = upper(*name++);
-    }
-
-    if (*name == '.') {
-        name++;
-        i = 8;
-        while (*name && *name != ' ' && *name != '\t') {
-            if (i >= 11) {
-                return false;
-            }
-            out[i++] = upper(*name++);
-        }
-    }
-
-    return out[0] != ' ';
-}
-
-static const uint8_t *root_entry(uint32_t index) {
-    return fs.image + (fs.root_lba * 512u) + index * 32u;
-}
-
-static uint16_t fat_next(uint16_t cluster) {
-    const uint8_t *fat = fs.image + fs.reserved_sectors * 512u;
-    uint32_t offset = cluster + (cluster / 2u);
-    uint16_t value = (uint16_t)fat[offset] | ((uint16_t)fat[offset + 1] << 8);
-    if (cluster & 1u) {
-        value >>= 4;
-    } else {
-        value &= 0x0FFFu;
-    }
-    return value;
-}
-
-static const uint8_t *find_root_file(const char *name) {
-    char dos_name[11];
-    if (!make_83(name, dos_name)) {
-        return NULL;
-    }
-
-    for (uint32_t i = 0; i < fs.root_entries; i++) {
-        const uint8_t *e = root_entry(i);
-        if (e[0] == 0x00) {
-            return NULL;
-        }
-        if (e[0] == 0xE5 || (e[11] & 0x08) || (e[11] & 0x10)) {
-            continue;
-        }
-        bool same = true;
-        for (uint32_t j = 0; j < 11; j++) {
-            if ((char)e[j] != dos_name[j]) {
-                same = false;
-                break;
-            }
-        }
-        if (same) {
-            return e;
-        }
-    }
-    return NULL;
-}
-
-static bool fs_read_file(const char *name, uint8_t *buf, uint32_t max_len, uint32_t *out_len) {
-    const uint8_t *e = find_root_file(name);
-    if (!e) {
-        return false;
-    }
-
-    uint32_t size = rd32(e + 28);
-    uint32_t copied = 0;
-    uint16_t cluster = rd16(e + 26);
-
-    while (cluster >= 2 && cluster < 0xFF8 && copied < size && copied < max_len) {
-        uint32_t lba = fs.data_lba + ((uint32_t)cluster - 2u) * fs.sectors_per_cluster;
-        uint32_t offset = lba * 512u;
-        uint32_t chunk = (uint32_t)fs.sectors_per_cluster * 512u;
-        if (offset + chunk > fs.image_size) {
-            break;
-        }
-        if (chunk > size - copied) {
-            chunk = size - copied;
-        }
-        if (chunk > max_len - copied) {
-            chunk = max_len - copied;
-        }
-        for (uint32_t i = 0; i < chunk; i++) {
-            buf[copied + i] = fs.image[offset + i];
-        }
-        copied += chunk;
-        cluster = fat_next(cluster);
-    }
-
-    *out_len = copied;
-    return copied == size || copied == max_len;
-}
-
-static void print_root_name(const uint8_t *e) {
-    for (uint32_t i = 0; i < 8 && e[i] != ' '; i++) {
-        console_putc((char)e[i]);
-    }
-    if (e[8] != ' ') {
-        console_putc('.');
-        for (uint32_t i = 8; i < 11 && e[i] != ' '; i++) {
-            console_putc((char)e[i]);
-        }
-    }
+    return false;
 }
 
 static void cmd_dir(void) {
-    uint32_t files = 0;
-    uint32_t bytes = 0;
-    print(" Directory of A:\\\n\n");
-    for (uint32_t i = 0; i < fs.root_entries; i++) {
-        const uint8_t *e = root_entry(i);
-        if (e[0] == 0x00) {
-            break;
-        }
-        if (e[0] == 0xE5 || (e[11] & 0x08) || (e[11] & 0x10)) {
-            continue;
-        }
-        print_root_name(e);
-        uint32_t name_len = 0;
-        for (uint32_t j = 0; j < 8 && e[j] != ' '; j++) {
-            name_len++;
-        }
-        if (e[8] != ' ') {
-            name_len++;
-            for (uint32_t j = 8; j < 11 && e[j] != ' '; j++) {
-                name_len++;
-            }
-        }
-        while (name_len++ < 14) {
-            console_putc(' ');
-        }
-        uint32_t size = rd32(e + 28);
-        print_dec(size);
-        print(" bytes\n");
-        files++;
-        bytes += size;
+    fs_root_entry_t entry; uint32_t cursor = 0; uint32_t files = 0; uint32_t bytes = 0;
+    print(" Directory of A:\\
+\n");
+    while (g_fs->list_root(&cursor, &entry)) {
+        print(entry.name);
+        uint32_t name_len = str_len(entry.name);
+        while (name_len++ < 14) console_putc(' ');
+        print_dec(entry.size); print(" bytes\n"); files++; bytes += entry.size;
     }
-    print("\n");
-    print_dec(files);
-    print(" file(s)  ");
-    print_dec(bytes);
-    print(" bytes\n");
+    print("\n"); print_dec(files); print(" file(s)  "); print_dec(bytes); print(" bytes\n");
 }
 
-static uint32_t fs_file_size(const char *name) {
-    const uint8_t *e = find_root_file(name);
-    if (!e) {
-        return 0xFFFFFFFFu;
-    }
-    return rd32(e + 28);
-}
+static uint32_t fs_file_size(const char *name) { fs_stat_t st; return g_fs->stat(name,&st)?st.size:0xFFFFFFFFu; }
 
 static void cmd_type(const char *name) {
     uint32_t len = 0;
-    if (!fs_read_file(name, file_buffer, sizeof(file_buffer) - 1u, &len)) {
+    if (!g_fs->read_file(name, file_buffer, sizeof(file_buffer) - 1u, &len)) {
         print("File not found or too large\n");
         return;
     }
@@ -639,7 +456,7 @@ static void cmd_dump(char *args) {
     }
 
     file_size = fs_file_size(name);
-    if (file_size == 0xFFFFFFFFu || !fs_read_file(name, file_buffer, count, &len)) {
+    if (file_size == 0xFFFFFFFFu || !g_fs->read_file(name, file_buffer, count, &len)) {
         print("File not found\n");
         return;
     }
@@ -687,7 +504,7 @@ static void cmd_wc(char *args) {
     }
 
     file_size = fs_file_size(name);
-    if (file_size == 0xFFFFFFFFu || !fs_read_file(name, file_buffer, sizeof(file_buffer), &len)) {
+    if (file_size == 0xFFFFFFFFu || !g_fs->read_file(name, file_buffer, sizeof(file_buffer), &len)) {
         print("File not found or too large\n");
         return;
     }
@@ -920,7 +737,7 @@ static void cmd_script(char *args) {
         print("Usage: SCRIPT filename\n");
         return;
     }
-    if (!fs_read_file(args, script, sizeof(file_buffer) - 1u, &len)) {
+    if (!g_fs->read_file(args, script, sizeof(file_buffer) - 1u, &len)) {
         print("Script file not found or too large\n");
         return;
     }
@@ -1037,12 +854,16 @@ static void cmd_mem(void) {
 
 static void cmd_info(void) {
     cmd_mem();
-    print("FAT12 root LBA ");
-    print_dec(fs.root_lba);
+    print("FS driver ");
+    print(g_fs_info.driver_name);
+    print(", bytes/sector ");
+    print_dec(g_fs_info.bytes_per_sector);
+    print("\nFS root LBA ");
+    print_dec(g_fs_info.root_lba);
     print(", data LBA ");
-    print_dec(fs.data_lba);
+    print_dec(g_fs_info.data_lba);
     print(", root entries ");
-    print_dec(fs.root_entries);
+    print_dec(g_fs_info.root_entries);
     print("\n");
 }
 
@@ -1146,7 +967,7 @@ static void run_script_file(const char *name) {
         return;
     }
     script = script_buffers[script_depth];
-    if (!fs_read_file(name, script, sizeof(script_buffers[0]) - 1u, &len)) {
+    if (!g_fs->read_file(name, script, sizeof(script_buffers[0]) - 1u, &len)) {
         print("Batch file not found or too large\n");
         return;
     }
@@ -1273,8 +1094,8 @@ void kmain(const boot_info_t *boot) {
 
     g_image = (const uint8_t *)(uintptr_t)boot->image_base;
     g_image_size = boot->image_size;
-    if (!fs_init(g_image, g_image_size)) {
-        print("FAT12 image mount failed\n");
+    if (!fs_mount_image(g_image, g_image_size)) {
+        print("Image mount failed: no supported filesystem\n");
         for (;;) {
             __asm__ volatile("hlt");
         }
