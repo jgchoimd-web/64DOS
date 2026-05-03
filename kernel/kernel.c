@@ -104,8 +104,7 @@ static bool is_rem_comment(const char *line) {
     if (!starts_icase(line, "REM")) {
         return false;
     }
-    char next = line[3];
-    return next == 0 || next == ' ' || next == '\t';
+    return line[3] == 0 || line[3] == ' ' || line[3] == '	';
 }
 
 static char *skip_spaces(char *s) {
