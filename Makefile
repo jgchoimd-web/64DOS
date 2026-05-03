@@ -13,12 +13,15 @@ CFLAGS := -std=c11 -O2 -Wall -Wextra -ffreestanding -fno-stack-protector \
 	-fno-pic -m64 -mno-red-zone -mgeneral-regs-only -Ikernel/include
 LDFLAGS := -nostdlib -z max-page-size=0x1000 -T kernel/linker.ld
 
-.PHONY: all clean check-tools test smoke image-test unit-test
+.PHONY: all clean check-tools check-tools-all test smoke image-test unit-test
 
 all: $(IMAGE)
 
 check-tools:
-	$(PYTHON) scripts/check-tools.py
+	$(PYTHON) scripts/check-tools.py --profile build
+
+check-tools-all:
+	$(PYTHON) scripts/check-tools.py --profile all
 
 $(BUILD) $(DIST):
 	mkdir -p $@
