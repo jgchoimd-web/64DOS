@@ -27,6 +27,14 @@ static uint8_t vga_color = DEFAULT_VGA_COLOR;
 static char prompt_text[32] = DEFAULT_PROMPT;
 static uint32_t script_depth;
 
+typedef struct script_var {
+    char name[16];
+    int32_t value;
+} script_var_t;
+
+static script_var_t runtime_vars[16];
+static uint32_t runtime_var_count;
+
 typedef struct fat12 {
     const uint8_t *image;
     uint32_t image_size;
@@ -45,6 +53,8 @@ static fat12_t fs;
 static char line_buffer[128];
 static uint8_t file_buffer[8192];
 static uint8_t script_buffers[MAX_SCRIPT_DEPTH][8192];
+
+static void execute_command(char *line);
 
 static inline void outb(uint16_t port, uint8_t value) {
     __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
@@ -841,10 +851,139 @@ static void cmd_beep(void) {
     print("Beep\n");
 }
 
+
+static int32_t parse_int32(const char *s, bool *ok) {
+    bool neg = false;
+    uint32_t value = 0;
+    *ok = false;
+    if (!s || !*s) {
+        return 0;
+    }
+    if (*s == '-') {
+        neg = true;
+        s++;
+    }
+    if (!*s) {
+        return 0;
+    }
+    while (*s) {
+        if (*s < '0' || *s > '9') {
+            return 0;
+        }
+        value = value * 10u + (uint32_t)(*s - '0');
+        s++;
+    }
+    *ok = true;
+    if (neg) {
+        return -(int32_t)value;
+    }
+    return (int32_t)value;
+}
+
+static script_var_t *find_runtime_var(const char *name) {
+    for (uint32_t i = 0; i < runtime_var_count; i++) {
+        if (str_icmp(runtime_vars[i].name, name) == 0) {
+            return &runtime_vars[i];
+        }
+    }
+    return 0;
+}
+
+static script_var_t *get_or_create_runtime_var(const char *name) {
+    script_var_t *v = find_runtime_var(name);
+    if (v) {
+        return v;
+    }
+    if (runtime_var_count >= (sizeof(runtime_vars) / sizeof(runtime_vars[0]))) {
+        return 0;
+    }
+    v = &runtime_vars[runtime_var_count++];
+    copy_text(v->name, sizeof(v->name), name);
+    v->value = 0;
+    return v;
+}
+
+static void cmd_script(char *args) {
+    uint32_t len = 0;
+    uint8_t *script = file_buffer;
+    char line[128];
+    uint32_t pos = 0;
+
+    args = skip_spaces(args);
+    if (!*args) {
+        print("Usage: SCRIPT filename\n");
+        return;
+    }
+    if (!fs_read_file(args, script, sizeof(file_buffer) - 1u, &len)) {
+        print("Script file not found or too large\n");
+        return;
+    }
+    script[len] = 0;
+    runtime_var_count = 0;
+
+    for (uint32_t i = 0; i <= len; i++) {
+        char c = (char)script[i];
+        if (c == '\r') {
+            continue;
+        }
+        if (c == '\n' || c == 0) {
+            line[pos] = 0;
+            char *cur = skip_spaces(line);
+            trim_right(cur);
+            if (*cur && !is_rem_comment(cur) && cur[0] != '#') {
+                char *rest = cur;
+                char *op = take_token(&rest);
+                if (str_icmp(op, "SET") == 0) {
+                    char *name = take_token(&rest);
+                    bool ok;
+                    int32_t v;
+                    script_var_t *var;
+                    if (!*name) { print("SCRIPT: SET needs variable\n"); goto fail; }
+                    v = parse_int32(skip_spaces(rest), &ok);
+                    if (!ok) { print("SCRIPT: SET needs integer value\n"); goto fail; }
+                    var = get_or_create_runtime_var(name);
+                    if (!var) { print("SCRIPT: variable table full\n"); goto fail; }
+                    var->value = v;
+                } else if (str_icmp(op, "ADD") == 0) {
+                    char *name = take_token(&rest);
+                    bool ok;
+                    int32_t v;
+                    script_var_t *var = find_runtime_var(name);
+                    if (!var) { print("SCRIPT: unknown variable\n"); goto fail; }
+                    v = parse_int32(skip_spaces(rest), &ok);
+                    if (!ok) { print("SCRIPT: ADD needs integer value\n"); goto fail; }
+                    var->value += v;
+                } else if (str_icmp(op, "PRINT") == 0) {
+                    char *arg = skip_spaces(rest);
+                    script_var_t *var = find_runtime_var(arg);
+                    if (var) {
+                        print_dec((uint32_t)var->value);
+                        print("\n");
+                    } else {
+                        print(arg);
+                        print("\n");
+                    }
+                } else if (str_icmp(op, "RUN") == 0) {
+                    execute_command(rest);
+                } else {
+                    print("SCRIPT: unknown instruction\n");
+                    goto fail;
+                }
+            }
+            pos = 0;
+        } else if (pos + 1 < sizeof(line)) {
+            line[pos++] = c;
+        }
+    }
+    return;
+fail:
+    print("SCRIPT aborted\n");
+}
+
 static void cmd_help(char *topic) {
     topic = skip_spaces(topic);
     if (!*topic) {
-        print("Commands: VER HELP DIR/LS TYPE/CAT DUMP/HEX WC RUN CLS MEM/INFO\n");
+        print("Commands: VER HELP DIR/LS TYPE/CAT DUMP/HEX WC RUN SCRIPT CLS MEM/INFO\n");
         print("          DATE TIME COLOR PROMPT PWD ECHO PAUSE BEEP EXIT REBOOT\n");
         return;
     }
@@ -856,6 +995,8 @@ static void cmd_help(char *topic) {
         print("STAT filename - show file size in bytes\n");
     } else if (str_icmp(topic, "RUN") == 0) {
         print("RUN filename - run a root-directory batch file, one command per line\n");
+    } else if (str_icmp(topic, "SCRIPT") == 0) {
+        print("SCRIPT filename - run runtime script language (SET/ADD/PRINT/RUN)\n");
     } else if (str_icmp(topic, "COLOR") == 0) {
         print("COLOR bgfg - set VGA text color with DOS hex digits, e.g. COLOR 1E\n");
     } else if (str_icmp(topic, "PROMPT") == 0) {
@@ -913,8 +1054,6 @@ static void reboot(void) {
         __asm__ volatile("hlt");
     }
 }
-
-static void execute_command(char *line);
 
 static void run_script_file(const char *name) {
     uint32_t len = 0;
@@ -1017,6 +1156,8 @@ static void execute_command(char *line) {
         } else {
             print("Usage: RUN filename\n");
         }
+    } else if (str_icmp(cmd, "SCRIPT") == 0) {
+        cmd_script(args);
     } else {
         print("Bad command or file name\n");
     }
