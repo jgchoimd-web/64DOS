@@ -804,7 +804,7 @@ static void cmd_help(char *topic) {
     topic = skip_spaces(topic);
     if (!*topic) {
         print("Commands: VER HELP DIR/LS TYPE/CAT DUMP/HEX WC RUN CLS MEM/INFO\n");
-        print("          DATE TIME COLOR PROMPT PWD ECHO EXIT REBOOT\n");
+        print("          DATE TIME COLOR PROMPT PWD ECHO EXIT REBOOT MOUNT\n");
         return;
     }
     if (str_icmp(topic, "DUMP") == 0 || str_icmp(topic, "HEX") == 0) {
@@ -817,6 +817,8 @@ static void cmd_help(char *topic) {
         print("COLOR bgfg - set VGA text color with DOS hex digits, e.g. COLOR 1E\n");
     } else if (str_icmp(topic, "PROMPT") == 0) {
         print("PROMPT [text] - set the command prompt, or reset it without text\n");
+    } else if (str_icmp(topic, "MOUNT") == 0) {
+        print("MOUNT - show current drive and FAT12 mount details\n");
     } else {
         print("No detailed help for that command\n");
     }
@@ -842,6 +844,17 @@ static void cmd_mem(void) {
 
 static void cmd_info(void) {
     cmd_mem();
+    print("FAT12 root LBA ");
+    print_dec(fs.root_lba);
+    print(", data LBA ");
+    print_dec(fs.data_lba);
+    print(", root entries ");
+    print_dec(fs.root_entries);
+    print("\n");
+}
+
+static void cmd_mount(void) {
+    print("Current drive A: (read-only RAM image)\n");
     print("FAT12 root LBA ");
     print_dec(fs.root_lba);
     print(", data LBA ");
@@ -935,6 +948,8 @@ static void execute_command(char *line) {
         cmd_mem();
     } else if (str_icmp(cmd, "INFO") == 0) {
         cmd_info();
+    } else if (str_icmp(cmd, "MOUNT") == 0) {
+        cmd_mount();
     } else if (str_icmp(cmd, "DATE") == 0) {
         cmd_date();
     } else if (str_icmp(cmd, "TIME") == 0) {
