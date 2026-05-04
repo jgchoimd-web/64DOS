@@ -1018,6 +1018,34 @@ static void cmd_script(char *args) {
                     v = parse_int32(skip_spaces(rest), &ok);
                     if (!ok) { print("SCRIPT: ADD needs integer value\n"); goto fail; }
                     var->value += v;
+                } else if (str_icmp(op, "SUB") == 0) {
+                    char *name = take_token(&rest);
+                    bool ok;
+                    int32_t v;
+                    script_var_t *var = find_runtime_var(name);
+                    if (!var) { print("SCRIPT: unknown variable\n"); goto fail; }
+                    v = parse_int32(skip_spaces(rest), &ok);
+                    if (!ok) { print("SCRIPT: SUB needs integer value\n"); goto fail; }
+                    var->value -= v;
+                } else if (str_icmp(op, "MUL") == 0) {
+                    char *name = take_token(&rest);
+                    bool ok;
+                    int32_t v;
+                    script_var_t *var = find_runtime_var(name);
+                    if (!var) { print("SCRIPT: unknown variable\n"); goto fail; }
+                    v = parse_int32(skip_spaces(rest), &ok);
+                    if (!ok) { print("SCRIPT: MUL needs integer value\n"); goto fail; }
+                    var->value *= v;
+                } else if (str_icmp(op, "DIV") == 0) {
+                    char *name = take_token(&rest);
+                    bool ok;
+                    int32_t v;
+                    script_var_t *var = find_runtime_var(name);
+                    if (!var) { print("SCRIPT: unknown variable\n"); goto fail; }
+                    v = parse_int32(skip_spaces(rest), &ok);
+                    if (!ok) { print("SCRIPT: DIV needs integer value\n"); goto fail; }
+                    if (v == 0) { print("SCRIPT: DIV by zero\n"); goto fail; }
+                    var->value /= v;
                 } else if (str_icmp(op, "PRINT") == 0) {
                     char *arg = skip_spaces(rest);
                     script_var_t *var = find_runtime_var(arg);
@@ -1062,7 +1090,7 @@ static void cmd_help(char *topic) {
         print("RUN filename - execute by type: .BAT/.CMD as batch, executable header as binary\n");
         print("            batch files run one command per line from root directory\n");
     } else if (str_icmp(topic, "SCRIPT") == 0) {
-        print("SCRIPT filename - run runtime script language (SET/ADD/PRINT/RUN)\n");
+        print("SCRIPT filename - run runtime script language (SET/ADD/SUB/MUL/DIV/PRINT/RUN)\n");
     } else if (str_icmp(topic, "COLOR") == 0) {
         print("COLOR bgfg - set VGA text color with DOS hex digits, e.g. COLOR 1E\n");
     } else if (str_icmp(topic, "PROMPT") == 0) {
