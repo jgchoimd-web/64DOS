@@ -1,6 +1,9 @@
 REM 64DOS runtime script language demo
 SET COUNT 10
 ADD COUNT 5
+MUL COUNT 2
+SUB COUNT 4
+DIV COUNT 2
 PRINT COUNT
 PRINT Running DIR via shell command
 RUN DIR

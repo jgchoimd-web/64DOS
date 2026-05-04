@@ -81,6 +81,9 @@ Supported script instructions:
 
 - `SET`
 - `ADD`
+- `SUB`
+- `MUL`
+- `DIV`
 - `PRINT`
 - `RUN` (including `*.RXE` dedicated executable files)
 
