@@ -1,0 +1,21 @@
+64EXCLS
+ECHO 64DOS Mini Pong (public-domain style)
+ECHO Controls are automatic in this demo.
+PAUSE
+CLS
+ECHO |o         |
+PAUSE
+CLS
+ECHO |  o       |
+PAUSE
+CLS
+ECHO |    o     |
+PAUSE
+CLS
+ECHO |      o   |
+PAUSE
+CLS
+ECHO |         o|
+PAUSE
+CLS
+ECHO SCORE: LEFT 1 RIGHT 0
